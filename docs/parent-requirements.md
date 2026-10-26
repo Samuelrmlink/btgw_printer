@@ -245,3 +245,46 @@ Let `APP_DEFCONFIG` take a list (base, then fragments). Until then our `tools/bu
 The PM220 driver doesn't need a fix: it opens with `npin 0` and answers each `PEX_CL_PIN` itself. Other modules would hit the same thing, though. Either option would do:
 - resume at the next PIN after the retry;
 - document that the list restarts.
+
+---
+
+## C. Bugs found in testing (2026-10-26, against b397a84)
+
+Found running the real btgw image in mcusim (`feature/printer-sims`, simulated PM220 / P21 / D30 / PL70e-BT) and on the bench board. Workarounds on our side are noted. Each one should be fixed in the parent.
+
+### B1 (Must): Classic security level is judged before it is known, so every session at level ≥ 2 fails
+
+What happens:
+- **Legacy-PIN printers (PM220):** on `HCI_EVENT_ENCRYPTION_CHANGE`, `src/bt/classic/spp.c` calls `gap_security_level(acl)`. Once the PIN pairing is over (`cl_io_held() < 0`), it treats the answer as final.
+- **SSP Just Works printers (P21, D30):** `HCI_EVENT_SIMPLE_PAIRING_COMPLETE` calls `reassess(..., final = 1)` before the link is encrypted.
+- **Why the answer is wrong:** BTstack only knows the level after Read Encryption Key Size completes. Until then `gap_security_level_for_connection()` returns LEVEL_0 (`encryption_key_size` is 0).
+- **Effect:** the session fails with "security level not met" right after a successful pairing. Real controllers send Encryption Change before the key size, so real printers hit this too. The bench PL70e's Classic attempt failed the same way.
+
+Fix: treat only `GAP_EVENT_SECURITY_LEVEL`, or the key-size completion, as final. Don't treat Simple Pairing Complete or Encryption Change as final.
+
+Workaround in btgw_printer: Classic drivers open at level 0. A printer config can set `"security_level"` once this is fixed.
+
+**Done when:** a session at level 2 opens to a legacy-PIN peer and to an SSP Just Works peer, both in mcusim and on a real PM220.
+
+### B2 (Should): Classic stays "busy" for good after a failed session plus an immediate SDP reconnect
+
+What happens:
+- After an auth failure, an immediate `classic.connect` that needs SDP (`uuid`, no channel) timed out with "connect deadline" without paging.
+- After that, every connect needing SDP returned `busy` ("the radio cannot start that now"). Wi-Fi then logged "deferring the AP, Bluetooth has the radio".
+- A connect to a fixed `channel` still worked.
+
+Suspected cause: `s_sdp_h` is left pointing at the timed-out session. `begin_sdp` registered a query callback that never ran. Not confirmed.
+
+**Done when:** a timed-out or failed SDP lookup always clears the SDP owner, and the next SDP connect pages normally.
+
+### B3 (Check): the bench board's LittleFS refuses any write over about a byte
+
+On the bench board (fw 1.277, 1200 KB LittleFS at 0x250000 on the 1 MiB slot map):
+- PUT `/api/fs/...` and module writes fail with "write failed" / "fs write busy or failed" for anything bigger than about a byte.
+- `sys.info` shows `fs.kb 1200`, `migration none`, and listing works.
+
+This may be the board's state after the re-partition (stale or corrupt blocks) rather than code. It needs looking at on the board before a standalone deploy, which writes the whole app to flash. Module files went to the SD card meanwhile.
+
+**Done when:** the cause is known; the fix is either a reformat/migration procedure or a code fix.
+
+C10 above (the PIN list restarting after the drop-key retry) is a fourth finding from the same runs.
