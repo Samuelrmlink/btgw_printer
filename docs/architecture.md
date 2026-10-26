@@ -55,7 +55,7 @@ must stay under ~960 bytes and replies under ~2.8 KB (parent limits).
 | `printer.devices` | `{"driver"?}` | `{"devices":[{"driver","addr","name","rssi","model","transport"}]}` |
 | `printer.connect` | `{"driver","addr","config"?:{...}}` | `{"pending":true}` |
 | `printer.disconnect` | `{"driver"?,"addr"?}` | `{"ok":true}` |
-| `printer.status` | `{"driver"?,"addr"?}` | `{"printers":[{"driver","addr","model","state","battery"?,"paper"?,"lid"?,"media"?,"error"?}],"job":{...}|null}` |
+| `printer.status` | `{"driver"?,"addr"?}` | `{"printers":[{"driver","addr","model","state","why"?,"battery"?,"charging"?,"paper"?,"lid"?,"busy"?,"media"?:{"type","w_mm","h_mm"},"dpi"?,"fw"?}],"job":{"job","state","driver","copy","copies","sent","total"}|null}` |
 | `printer.print` | see below | `{"job":id}` or error `busy` / `not_connected` / `bad_request` |
 | `printer.cancel` | `{"job"?}` | `{"ok":true}` |
 
@@ -67,17 +67,49 @@ must stay under ~960 bytes and replies under ~2.8 KB (parent limits).
  "density":8,"speed":-1,"copies":1,"rotate":0,"options":{}}
 ```
 `path` uses the parent's virtual names: `printer/...` is LittleFS, and
-`sd/printer/...` is the card (`sd:/` for `pex_fs_*`).
+`sd/printer/...` is the card (`sd:/` for `pex_fs_*`; `lfs:/...` and `sd:/...`
+are accepted as they are). The file must be exactly `rows * ceil(width_dots/8)`
+bytes: 1 bit per dot, MSB first, row 0 first, and the burning bit value is
+the model's `black_bit` (0 for the Nelko models: 0 = black, 1 = white).
+`origin` is where the bitmap goes on the label, in dots, after calibration.
+`density`/`speed` are clamped to the model's ranges (-1 or absent = the
+model's default; a model with `"speed":null` gets no speed command).
+`media.h_mm` 0 or absent means continuous media. `options` is passed to the
+driver as it is (PM220: `{"preflight":false}` skips the ESC !? check before
+the job; virtual: `rate`, `fail_at`, `no_file`).
+
+The hub reads the file once to see whether it is all black (and if so clears
+the first dot of every 16th row, the old firmware's head protection), then
+streams it in chunks of whole rows. It feeds the rows once when the driver
+prints copies itself (TSPL `PRINT n`), else once per copy.
+
+**Calibration and layout live in the web app.** The arithmetic the old PM220
+firmware did (`job.c`) is `drivers/test/ref/layout.c`, checked against the old
+code byte for byte; `drivers/test/golden/layout_vectors.json` holds 120
+input/output cases for the JavaScript port to match.
 
 ## Events
 
 | Event | Data |
 |---|---|
 | `printer.found` | `{"driver","addr","name","rssi","model"}` |
-| `printer.state` | `{"driver","addr","state":"idle|scanning|connecting|pairing|connected|printing|error","why"?}` |
-| `printer.status` | driver status JSON (battery, paper, lid, media) |
+| `printer.state` | `{"driver","addr","model","state":"idle|scanning|connecting|pairing|connected|waiting|printing","why"?,"pin"?,"channel"?,"retry_ms"?}` |
+| `printer.status` | one printer's status object (as in `printer.status`), sent when a reply from the printer changes it |
 | `printer.job` | `{"job","state":"queued|sending|printing|done|failed|cancelled","copy","copies","sent","total","message"?}` |
 | `printer.log` | `{"driver","msg"}` |
+
+Drivers put `"driver"` in every object they emit or list; the hub passes
+them on as `printer.<kind>`. `state` `waiting` means the link dropped and a
+reconnect is due in `retry_ms` (8 s, doubling to 60 s). A Classic driver
+reports the `pin` and `channel` that worked: save them in the printer's
+config (`printers.json`) and pass that config to `printer.connect`, and the
+next connect tries that PIN first and skips SDP. When a driver registers,
+the hub connects every printer in `printer/printers.json` with that driver
+and `auto_reconnect` not false, passing its whole entry as the config.
+
+Driver model caps (`printer.drivers`) carry `presets`, a list of media
+profile ids from `web/presets/media/`, written `<w>x<h>mm` (`50x30mm`) or
+`<w>x<h>in` (`4x6in`).
 
 ## Settings JSON
 

@@ -20,4 +20,6 @@ OLD_OBJ := $(BUILD)/old/tspl.o $(BUILD)/old/job.o
 $(BUILD)/old/%.o: $(OLD_PM220)/src/printer/%.c
 	@mkdir -p $(dir $@)
 	$(CC) -m32 -std=gnu11 -O1 -g -w $(SAN) -I$(OLD_PM220)/src -I$(OLD_PM220)/src/printer $(OLD_RENAME) -c $< -o $@
+OLD_OBJ += $(BUILD)/ref/old_fs_stub.o
 EXTRA_OBJ_tspl := $(OLD_OBJ)
+EXTRA_OBJ_pm220 := $(OLD_OBJ)

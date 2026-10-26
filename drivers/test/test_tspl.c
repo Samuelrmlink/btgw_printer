@@ -13,24 +13,13 @@
 #include <stdint.h>
 
 /* ---- the old code ---- */
-bool old_job_from_bitmap(const uint8_t *bitmap, int width_bytes, int height_dots, uint8_t *out,
-                         size_t out_cap, size_t *out_len, void *layout);
-bool old_job_test_frame(uint8_t *out, size_t out_cap, size_t *out_len);
 
-static const char *s_cal;   /* settings/print.json, or NULL */
-int fs_begin_read(const char *name, size_t *size) {
-    if (!s_cal || strcmp(name, "settings/print.json")) { return -1; }
-    *size = strlen(s_cal);
-    return 1;
-}
-int fs_read(int h, uint8_t *buf, size_t cap) {
-    (void)h;
-    size_t n = strlen(s_cal);
-    if (n > cap) { n = cap; }
-    memcpy(buf, s_cal, n);
-    return (int)n;
-}
-void fs_end_read(int h) { (void)h; }
+
+
+
+#include "ref/old_fs_stub.h"
+#define s_cal old_cal
+
 
 /* ---- the new path ---- */
 typedef struct {

@@ -34,7 +34,6 @@ enum { J_IDLE = 0, J_SCAN, J_FEED, J_WAIT };
 static drv_t s_drv[DRV_MAX];
 static char s_scratch[2048];
 static char s_emit[512];
-static char s_cfg[4096];
 static int s_task;
 static uint32_t s_next_job = 1;
 
@@ -132,10 +131,13 @@ static model_t *model_of(drv_t *d, const char *id) {
 static int autoconnect(void *arg) {
     drv_t *d = arg;
     if (!drv_live(d)) { return PEX_TASK_DONE; }
+    enum { CFG_MAX = 4096 };
     int fd = pex_fs_open("lfs:/printer/printers.json", PEX_FS_READ, NULL, NULL);
     if (fd < 0) { return PEX_TASK_DONE; }
+    char *s_cfg = pex_malloc(CFG_MAX);
+    if (!s_cfg) { pex_fs_close(fd); return PEX_TASK_DONE; }
     int n = 0, r;
-    while (n < (int)sizeof s_cfg - 1 && (r = pex_fs_read(fd, s_cfg + n, sizeof s_cfg - 1 - (size_t)n, NULL, NULL)) > 0) {
+    while (n < CFG_MAX - 1 && (r = pex_fs_read(fd, s_cfg + n, CFG_MAX - 1 - (size_t)n, NULL, NULL)) > 0) {
         n += r;
     }
     pex_fs_close(fd);
@@ -159,6 +161,7 @@ static int autoconnect(void *arg) {
         dcall(d, PRN_DRV_CONNECT, P(addr), P(obj ? obj : "{}"), 0);
         if (obj) { ((char *)obj)[len] = save; }
     }
+    pex_free(s_cfg);
     return PEX_TASK_DONE;
 }
 

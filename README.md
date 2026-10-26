@@ -21,7 +21,7 @@ successor of [pm220_rp2_webapp](https://github.com/Samuelrmlink/pm220_rp2_webapp
 | Vendor | Model | Transport | Status |
 |---|---|---|---|
 | Nelko | PL70e-BT | BLE | planned |
-| Nelko | PM220 | Bluetooth Classic SPP | waiting on parent (docs/parent-requirements.md) |
+| Nelko | PM220 | Bluetooth Classic SPP | driver done (feature/nelko-pm220), tested in simulation; hardware pending |
 
 ## Branches
 
