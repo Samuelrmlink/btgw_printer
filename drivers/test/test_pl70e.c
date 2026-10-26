@@ -11,6 +11,7 @@
 #include "fh_ble.h"
 #include "printer_driver.h"
 #include "vendors/nelko/pl70e/pl70e_proto.h"
+#include "drv.h"
 #include <stdio.h>
 
 int pl70e__pex_main(const pex_host_t *h, uint32_t reason, void *arg);
@@ -407,6 +408,45 @@ static void t_stop_releases(void) {
     CHECK(!fh_ble_peer_stats(S.p)->connected);
 }
 
+/* The same job through the real printer_hub: printer.connect, a job file,
+ * printer.print, printer.job events. */
+static void t_print_through_real_hub(void) {
+    fh_reset();
+    free(S.page);
+    free(S.bmp);
+    memset(&S, 0, sizeof S);
+    load_hub();
+    add_printer(1, 185);
+    s_drv = fh_module("nelko_pl70e", pl70e__pex_main);
+    fh_export(s_drv, PRN_DRV_SYM, (void *)pl70e__prn_drv);
+    fh_load(s_drv);
+    fh_start(s_drv, "{}");
+    fh_run(50);
+    char R[2048];
+    CHECK(fh_op("printer.drivers", "{}", R, sizeof R) > 0);
+    CHECK_HAS(R, "nelko_pl70e");
+    CHECK(fh_op("printer.connect", "{\"driver\":\"nelko_pl70e\",\"addr\":\"" ADDR "\"}", R, sizeof R) > 0);
+    CHECK(wait_ev("printer.state", "\"connected\"", NULL, 20000));
+    int wb = 100, h = 600;      /* 800 dots: narrower than the head */
+    uint8_t *page = make_page(wb, h);
+    fh_fs_put("lfs:/printer/var/job.bin", page, (size_t)wb * h);
+    CHECK(fh_op("printer.print", "{\"driver\":\"nelko_pl70e\",\"addr\":\"" ADDR "\",\"model\":\"pl70e\","
+                "\"path\":\"printer/var/job.bin\",\"width_dots\":800,\"rows\":600,\"origin\":[16,0],"
+                "\"media\":{\"w_mm\":101.6,\"h_mm\":152.4,\"gap_mm\":3,\"type\":\"gap\"},"
+                "\"density\":12,\"speed\":-1,\"copies\":3,\"rotate\":0,\"options\":{}}", R, sizeof R) > 0);
+    CHECK_HAS(R, "\"job\"");
+    CHECK(wait_ev("printer.job", "\"done\"", NULL, 120000));
+    CHECK_STR(S.size, "101.6 mm,152.4 mm");
+    CHECK_EQ(S.density, 12);
+    CHECK_EQ(S.x, 16);
+    CHECK_EQ(S.width_bytes, wb);
+    CHECK_EQ(S.height, h);
+    CHECK_EQ(S.copies, 3);
+    CHECK_EQ(S.prints, 1);
+    CHECK(S.page && S.page_n == (size_t)wb * h && !memcmp(S.page, page, S.page_n));
+    free(page);
+}
+
 int main(void) {
     RUN(t_proto);
     RUN(t_info);
@@ -420,5 +460,6 @@ int main(void) {
     RUN(t_link_loss_fails_job_and_reconnects);
     RUN(t_silent_printer_times_out_ok);
     RUN(t_stop_releases);
+    RUN(t_print_through_real_hub);
     T_DONE();
 }

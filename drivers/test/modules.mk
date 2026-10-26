@@ -23,3 +23,5 @@ $(BUILD)/old/%.o: $(OLD_PM220)/src/printer/%.c
 OLD_OBJ += $(BUILD)/ref/old_fs_stub.o
 EXTRA_OBJ_tspl := $(OLD_OBJ)
 EXTRA_OBJ_pm220 := $(OLD_OBJ)
+
+-include pl70e.mk
