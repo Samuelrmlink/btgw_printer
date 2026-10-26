@@ -55,7 +55,8 @@ enum {
     /* a0 = scan ms (0 = stop). Results come back as PRN_HUB_EMIT "found". */
     PRN_DRV_SCAN = 2,
     /* a0 = char *out, a1 = cap: JSON array of
-     * {"addr","name","rssi","model","transport"} the driver would accept. */
+     * {"driver","addr","name","rssi","model","transport"} the driver would
+     * accept. */
     PRN_DRV_DEVICES = 3,
     /* a0 = const char *addr "AA:BB:CC:DD:EE:FF", a1 = const char *cfg JSON
      * (the printer config from printer/printers.json, may be "{}").
@@ -65,13 +66,18 @@ enum {
     PRN_DRV_DISCONNECT = 5,
     /* a0 = const char *addr or 0, a1 = char *out, a2 = cap: status JSON */
     PRN_DRV_STATUS = 6,
-    /* a0 = const prn_job_t *job. Prepare to accept job->rows_total rows. */
+    /* a0 = const prn_job_t *job (copy it: it is valid for the call only).
+     * Prepare to accept job->rows_total rows. Returns 1 if the driver prints
+     * job->copies itself from one pass of the rows (TSPL "PRINT n"), 0 if
+     * the hub must feed the rows once per copy (job->copy counts), or a
+     * negative PEX_E* to refuse the job. */
     PRN_DRV_JOB_BEGIN = 7,
     /* a0 = const uint8_t *rows, a1 = byte count (always whole rows of
      * job->row_bytes). Returns the bytes taken (whole rows; may be fewer
      * than offered) or PEX_EBUSY. */
     PRN_DRV_JOB_FEED = 8,
-    /* All rows were fed for this copy. a0 = copy index (0-based). */
+    /* All rows were fed for this pass. a0 = copy index (0-based). After the
+     * last pass the driver flushes and reports PRN_HUB_JOB_DONE. */
     PRN_DRV_JOB_END = 9,
     /* Abandon the current job. */
     PRN_DRV_CANCEL = 10,
@@ -100,8 +106,8 @@ typedef struct {
     /* placement of the bitmap on the label, in dots (calibration applied by
      * the web app; a driver that cannot place the bitmap ignores these) */
     int16_t origin_x, origin_y;
-    /* media */
-    uint16_t width_mm10, height_mm10, gap_mm10;   /* tenths of a mm; height 0 = continuous */
+    /* media, in hundredths of a mm (50 mm = 5000); height 0 = continuous */
+    uint32_t width_mm100, height_mm100, gap_mm100;
     uint8_t media_type;      /* PRN_MEDIA_* */
     /* settings, already clamped to the model's ranges by the hub */
     int8_t density;          /* -1 = model default */
@@ -109,6 +115,8 @@ typedef struct {
     uint8_t copies;          /* >= 1 */
     uint8_t copy;            /* 0-based copy being fed */
     uint8_t rotate;          /* 0,1,2,3 x 90 deg, for drivers whose printer rotates */
+    uint8_t black_bit;       /* the bit value that burns a dot, from the model caps */
+    uint8_t all_black;       /* the hub found no white dot and punched some in (head protection) */
     char options[96];        /* driver-specific JSON object from the job, or "{}" */
 } prn_job_t;
 
@@ -117,7 +125,11 @@ typedef struct {
  *  "models":[{"id":"pm220","vendor":"Nelko","name":"PM220","transport":"classic",
  *    "dpi":203,"head_dots":384,"min_len_mm":10,"max_len_mm":200,
  *    "media":["gap","continuous"],"density":{"min":0,"max":15,"default":8},
- *    "speed":{"min":1,"max":4,"default":2},"black_bit":0,
- *    "status":["battery","paper","lid","media"],"presets":["nelko-50x30",...]}]} */
+ *    "speed":null,"black_bit":0,"copies":true,
+ *    "status":["battery","paper","lid","media"],"presets":["50x30mm","40x30mm"]}]}
+ * "speed" is null when the printer takes no speed command. The hub caches
+ * id, black_bit and the density/speed ranges of up to four models per driver
+ * and clamps job settings to them. Preset ids are media profile ids from the
+ * web app's presets (web/presets/media/). */
 
 #endif
