@@ -24,7 +24,7 @@
 #define QUERY_TIMEOUT_MS 1500
 #define DONE_TIMEOUT_MS 60000     /* after the last byte: wait this long for READY */
 #define SCAN_FOR_CONNECT_MS 5000
-#define TX_CAP 2048
+#define TX_CAP 512
 #define INFLIGHT_MAX 3            /* the gateway queues 4 GATT ops per link */
 
 enum { ST_IDLE = 0, ST_SCAN, ST_CONNECT, ST_DISCOVER, ST_READY, ST_BACKOFF };
@@ -63,7 +63,7 @@ static uint32_t s_wait_t0;
 static uint32_t s_pad_left;       /* white bitmap bytes still owed after a cancel */
 static uint8_t s_pad_crlf;
 
-static char s_buf[512];
+static char s_buf[256];
 
 static uint32_t tx_used(void) { return s_tx_head - s_tx_tail; }
 static uint32_t tx_room(void) { return TX_CAP - tx_used(); }
@@ -75,28 +75,29 @@ static void tx_put(const void *p, uint32_t n) {
 }
 
 static void emit_state(const char *state, const char *why) {
-    pex_jw_t w;
-    pex_jw_init(&w, s_buf, sizeof s_buf);
-    pex_jw_obj(&w, NULL);
-    pex_jw_str(&w, "addr", s_addr_str);
-    pex_jw_str(&w, "model", "pl70e");
-    pex_jw_str(&w, "state", state);
-    if (why) { pex_jw_str(&w, "why", why); }
-    pex_jw_end(&w);
-    if (pex_jw_finish(&w) >= 0) { prn_hub_emit(&s_hub, "state", s_buf); }
+    pex_snprintf(s_buf, sizeof s_buf, "{\"addr\":\"%s\",\"model\":\"pl70e\",\"state\":\"%s\"%s%s%s}",
+                 s_addr_str, state, why ? ",\"why\":\"" : "", why ? why : "", why ? "\"" : "");
+    prn_hub_emit(&s_hub, "state", s_buf);
+}
+
+static int status_json(char *out, size_t cap, int with_driver) {
+    const char *paper = "unknown", *lid = "unknown";
+    if (s_status != PL70E_ST_UNKNOWN) {
+        paper = s_status == PL70E_ST_NOPAPER ? "out" : "ok";
+        lid = s_status == PL70E_ST_LIDOPEN ? "open" : "closed";
+    }
+    return pex_snprintf(out, cap,
+        "{%s\"addr\":\"%s\",\"model\":\"pl70e\",\"printer\":\"%s\",\"paper\":\"%s\",\"lid\":\"%s\"",
+        with_driver ? "\"driver\":\"" DRV_NAME "\"," : "", s_addr_str, pl70e_status_name(s_status), paper, lid);
 }
 
 static void emit_status(void) {
-    pex_jw_t w;
-    pex_jw_init(&w, s_buf, sizeof s_buf);
-    pex_jw_obj(&w, NULL);
-    pex_jw_str(&w, "addr", s_addr_str);
-    pex_jw_str(&w, "model", "pl70e");
-    pex_jw_str(&w, "printer", pl70e_status_name(s_status));
-    pex_jw_str(&w, "paper", s_status == PL70E_ST_NOPAPER ? "out" : s_status == PL70E_ST_UNKNOWN ? "unknown" : "ok");
-    pex_jw_str(&w, "lid", s_status == PL70E_ST_LIDOPEN ? "open" : s_status == PL70E_ST_UNKNOWN ? "unknown" : "closed");
-    pex_jw_end(&w);
-    if (pex_jw_finish(&w) >= 0) { prn_hub_emit(&s_hub, "status", s_buf); }
+    int n = status_json(s_buf, sizeof s_buf - 2, 0);
+    if (n > 0 && n < (int)sizeof s_buf - 2) {
+        s_buf[n] = '}';
+        s_buf[n + 1] = 0;
+        prn_hub_emit(&s_hub, "status", s_buf);
+    }
 }
 
 static void finish_job(int outcome, const char *msg) {
@@ -330,56 +331,40 @@ static int tick(void *arg) {
 
 /* ---- prn_drv commands ---- */
 
+/* One literal: cheaper in a module than building it field by field. */
+static const char INFO[] =
+    "{\"driver\":\"" DRV_NAME "\",\"abi\":1,\"models\":[{\"id\":\"pl70e\",\"vendor\":\"Nelko\","
+    "\"name\":\"PL70e-BT\",\"transport\":\"ble\",\"dpi\":203,\"head_dots\":832,"
+    "\"min_len_mm\":10,\"max_len_mm\":300,\"media\":[\"gap\",\"continuous\"],"
+    "\"density\":{\"min\":0,\"max\":15,\"default\":8},\"speed\":null,\"black_bit\":0,"
+    "\"copies\":true,\"status\":[\"paper\",\"lid\",\"overheat\"],"
+    "\"presets\":[\"4x6in\",\"3x1in\",\"4x4in\",\"4x3in\",\"2x1in\"]}]}";
+
 static int drv_info(char *out, size_t cap) {
-    pex_jw_t w;
-    pex_jw_init(&w, out, cap);
-    pex_jw_obj(&w, NULL);
-    pex_jw_str(&w, "driver", DRV_NAME);
-    pex_jw_int(&w, "abi", PRN_ABI);
-    pex_jw_arr(&w, "models");
-    pex_jw_obj(&w, NULL);
-    pex_jw_str(&w, "id", "pl70e");
-    pex_jw_str(&w, "vendor", "Nelko");
-    pex_jw_str(&w, "name", "PL70e-BT");
-    pex_jw_str(&w, "transport", "ble");
-    pex_jw_int(&w, "dpi", PL70E_DPI);
-    pex_jw_int(&w, "head_dots", PL70E_HEAD_DOTS);
-    pex_jw_int(&w, "min_len_mm", 10);
-    pex_jw_int(&w, "max_len_mm", 300);
-    pex_jw_raw(&w, "media", "[\"gap\",\"continuous\"]");
-    pex_jw_raw(&w, "density", "{\"min\":0,\"max\":15,\"default\":8}");
-    pex_jw_null(&w, "speed");
-    pex_jw_int(&w, "black_bit", 0);
-    pex_jw_bool(&w, "copies", 1);
-    pex_jw_raw(&w, "status", "[\"paper\",\"lid\",\"overheat\"]");
-    pex_jw_raw(&w, "presets", "[\"4x6in\",\"3x1in\",\"4x4in\",\"4x3in\",\"2x1in\"]");
-    pex_jw_end(&w);
-    pex_jw_end(&w);
-    pex_jw_end(&w);
-    return pex_jw_finish(&w);
+    if (cap < sizeof INFO) { return PEX_ENOMEM; }
+    memcpy(out, INFO, sizeof INFO);
+    return (int)sizeof INFO - 1;
 }
 
 static int drv_devices(char *out, size_t cap) {
     pex_bt_dev_t d[8];
     int n = pex_bt_devices(d, 8, PL70E_NAME_PREFIX, NULL);
-    pex_jw_t w;
-    pex_jw_init(&w, out, cap);
-    pex_jw_arr(&w, NULL);
+    size_t o = 0;
+    if (cap < 3) { return PEX_ENOMEM; }
+    out[o++] = '[';
     for (int i = 0; i < n; i++) {
         if (!pl70e_name_match(d[i].name)) { continue; }
         char a[18];
         pex_bt_addr_str(d[i].addr, a);
-        pex_jw_obj(&w, NULL);
-        pex_jw_str(&w, "driver", DRV_NAME);
-        pex_jw_str(&w, "addr", a);
-        pex_jw_str(&w, "name", d[i].name);
-        pex_jw_int(&w, "rssi", d[i].rssi);
-        pex_jw_str(&w, "model", "pl70e");
-        pex_jw_str(&w, "transport", "ble");
-        pex_jw_end(&w);
+        int k = pex_snprintf(out + o, cap - o,
+            "%s{\"driver\":\"" DRV_NAME "\",\"addr\":\"%s\",\"name\":\"%s\",\"rssi\":%d,"
+            "\"model\":\"pl70e\",\"transport\":\"ble\"}", o > 1 ? "," : "", a, d[i].name, d[i].rssi);
+        if (k < 0 || o + (size_t)k + 2 > cap) { break; }
+        o += (size_t)k;
     }
-    pex_jw_end(&w);
-    return pex_jw_finish(&w);
+    out[o++] = ']';
+    out[o] = 0;
+    return (int)o;
 }
 
 static int drv_connect(const char *addr, const char *cfg) {
@@ -418,28 +403,27 @@ static const char *state_name(void) {
 }
 
 static int drv_status(const char *addr, char *out, size_t cap) {
-    pex_jw_t w;
-    pex_jw_init(&w, out, cap);
-    pex_jw_arr(&w, NULL);
-    if (s_have_addr && (!addr || strcmp(addr, s_addr_str) == 0)) {
-        pex_jw_obj(&w, NULL);
-        pex_jw_str(&w, "driver", DRV_NAME);
-        pex_jw_str(&w, "addr", s_addr_str);
-        pex_jw_str(&w, "model", "pl70e");
-        pex_jw_str(&w, "state", state_name());
-        pex_jw_str(&w, "printer", pl70e_status_name(s_status));
-        if (s_status != PL70E_ST_UNKNOWN) {
-            pex_jw_str(&w, "paper", s_status == PL70E_ST_NOPAPER ? "out" : "ok");
-            pex_jw_str(&w, "lid", s_status == PL70E_ST_LIDOPEN ? "open" : "closed");
-        }
-        if (s_job_st != JOB_NONE) {
-            pex_jw_int(&w, "sent", s_sent_total);
-            pex_jw_int(&w, "total", s_job_bytes);
-        }
-        pex_jw_end(&w);
+    if (!s_have_addr || (addr && strcmp(addr, s_addr_str) != 0)) {
+        return pex_snprintf(out, cap, "[]");
     }
-    pex_jw_end(&w);
-    return pex_jw_finish(&w);
+    out[0] = '[';
+    int n = status_json(out + 1, cap - 1, 1);
+    if (n < 0 || (size_t)n + 1 >= cap) { return PEX_ENOMEM; }
+    n += 1;
+    int k = pex_snprintf(out + n, cap - (size_t)n, ",\"state\":\"%s\"", state_name());
+    if (k < 0 || (size_t)(n + k) >= cap) { return PEX_ENOMEM; }
+    n += k;
+    if (s_job_st != JOB_NONE) {
+        k = pex_snprintf(out + n, cap - (size_t)n, ",\"sent\":%u,\"total\":%u",
+                         (unsigned)s_sent_total, (unsigned)s_job_bytes);
+        if (k < 0 || (size_t)(n + k) >= cap) { return PEX_ENOMEM; }
+        n += k;
+    }
+    if ((size_t)n + 3 > cap) { return PEX_ENOMEM; }
+    out[n++] = '}';
+    out[n++] = ']';
+    out[n] = 0;
+    return n;
 }
 
 static void make_tspl(tspl_job_t *t, const prn_job_t *j) {
