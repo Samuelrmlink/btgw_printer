@@ -1,0 +1,4 @@
+# Companion image: the parent's SD + Classic image, unchanged, with our app at
+# /printer/ next to the parent UI. tools/build.py appends these lines to the
+# base defconfig named below; a later line wins over the base.
+#base: pico2w_sd_classic_defconfig

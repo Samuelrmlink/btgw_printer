@@ -1,0 +1,4 @@
+[submodule "btgw"]
+	path = btgw
+	url = https://github.com/Samuelrmlink/bluetooth_rp2_webapp.git
+	branch = dev

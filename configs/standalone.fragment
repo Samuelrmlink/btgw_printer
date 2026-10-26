@@ -1,0 +1,5 @@
+# Standalone image: no SD card, no W5500, our app is the only web app.
+#base: pico2w_classic_defconfig
+CONFIG_NET_HOSTNAME="btgw-printer"
+# CONFIG_SD is not set
+# CONFIG_NET_ETH_W5500 is not set
