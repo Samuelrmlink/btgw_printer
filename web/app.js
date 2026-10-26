@@ -1532,10 +1532,25 @@ function scheduleStatus() {
 }
 document.addEventListener("visibilitychange", () => scheduleStatus());
 
+// mode.json sits next to the app (tools/deploy.py), wherever it is served
+// from: /printer/ on flash or the card's static route. Older deploys only
+// wrote it to flash, so that is the fallback.
+async function readMode() {
+    try {
+        const r = await fetch("mode.json", { cache: "no-store" });
+        if (r.ok) {
+            return await r.json();
+        }
+    } catch {
+        // not served here: fall through
+    }
+    return readJsonOr("printer/mode.json", null).catch(() => null);
+}
+
 async function onBoard() {
     await whenInfo();
     await refreshSd().catch(() => false);
-    const mode = await readJsonOr("printer/mode.json", null).catch(() => null);
+    const mode = await readMode();
     $("mode-switch").hidden = !(mode && mode.mode === "companion");
     await Promise.all([loadUserMedia(), loadPrinters()]);
     await printersUi.refreshDrivers();

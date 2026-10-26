@@ -3,10 +3,19 @@
 
   tools/deploy.py companion  --base http://192.168.8.1
   tools/deploy.py standalone --base http://10.255.255.23 [--sync]
+  tools/deploy.py companion  --base http://10.255.255.23 --target sd
 
 Builds dist/<mode>/ (tools/make_dist.py) and PUTs every .gz to /api/fs/,
 then writes printer/mode.json, which tells the app whether to show the
 "BTGW" switch button.
+
+--target sd puts the app on the micro SD card instead (PUT /api/sd/files/),
+under --sd-dir (default apps/printer), with mode.json beside it. The board
+serves it at --sd-url (default /sd/<sd-dir>/), which needs the parent's SD
+static route (docs/parent-requirements.md R2). The parent UI's switch button
+(js/ext/printer-switch/) still has to live on flash, because the parent loads
+extensions from there; it is rewritten to open --sd-url. Labels, printer
+configs and job files are not moved by this; the app picks their store.
 
 Companion mode never deletes anything: the parent UI and other projects'
 files share the board's flash (the parent's upload_fw_assets.py --sync would
@@ -15,7 +24,7 @@ the app's own (printer/**/*.gz outside printer/labels and printer/var, and
 the root index.html.gz); labels, printers.json, media.json and cfg/ are never
 touched.
 """
-import argparse, json, os, subprocess, sys, urllib.error, urllib.parse, urllib.request
+import argparse, gzip, json, os, subprocess, sys, urllib.error, urllib.parse, urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEEP = ("printer/labels/", "printer/var/")
@@ -55,13 +64,55 @@ def remote_gz(base, d=""):
     return out
 
 
+def fetch(base, path):
+    try:
+        with urllib.request.urlopen("%s/%s" % (base, path), timeout=30) as resp:
+            return resp.read()
+    except urllib.error.HTTPError:
+        return None
+
+
+def put(base, target, rel, data, dry):
+    api = "api/sd/files" if target == "sd" else "api/fs"
+    print("PUT", ("sd:/" if target == "sd" else "") + rel, "(%d B)" % len(data))
+    if dry:
+        return
+    for attempt in range(3):
+        try:
+            req("PUT", "%s/%s/%s" % (base, api, enc(rel)), data)
+            return
+        except urllib.error.HTTPError:
+            raise                     # the board answered: retrying won't help
+        except (urllib.error.URLError, OSError) as e:
+            if attempt == 2:
+                raise
+            print("  retry (%s)" % e)
+
+
+def point_switch(data, url):
+    """The parent UI's switch button, opening url instead of /printer/."""
+    src = gzip.decompress(data).decode()
+    old = 'const TARGET = "/printer/";'
+    if old not in src:
+        sys.exit("ext/printer-switch/index.js: TARGET line not found")
+    return gzip.compress(src.replace(old, "const TARGET = %s;" % json.dumps(url)).encode(), 9, mtime=0)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("mode", choices=("companion", "standalone"))
     ap.add_argument("--base", default="http://192.168.8.1", help="the board's URL")
     ap.add_argument("--sync", action="store_true", help="standalone only: delete the app's stale files")
+    ap.add_argument("--target", choices=("flash", "sd"), default="flash", help="where the app's files go")
+    ap.add_argument("--sd-dir", default="apps/printer", help="--target sd: the app's folder on the card")
+    ap.add_argument("--sd-url", help="--target sd: the URL the board serves it at (default /sd/<sd-dir>/)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
+    sys.stdout.reconfigure(line_buffering=True)   # keep warnings in order when piped
+    if a.sync and a.target == "sd":
+        sys.exit("--sync is for --target flash only")
+    sd_dir = a.sd_dir.strip("/")
+    sd_url = a.sd_url or "/sd/%s/" % sd_dir
     if a.sync and a.mode != "standalone":
         sys.exit("--sync is refused in companion mode: it would delete the parent UI's files")
     base = a.base.rstrip("/")
@@ -71,15 +122,38 @@ def main():
     for dirpath, _, files in os.walk(dist):
         for n in sorted(files):
             local.append(os.path.relpath(os.path.join(dirpath, n), dist).replace(os.sep, "/"))
-    for rel in sorted(local):
-        print("PUT", rel)
-        if not a.dry_run:
-            with open(os.path.join(dist, rel), "rb") as f:
-                req("PUT", "%s/api/fs/%s" % (base, enc(rel)), f.read())
+    def data(rel):
+        with open(os.path.join(dist, rel), "rb") as f:
+            return f.read()
     mode = json.dumps({"mode": a.mode}).encode()
-    print("PUT printer/mode.json", mode.decode())
-    if not a.dry_run:
-        req("PUT", "%s/api/fs/printer/mode.json" % base, mode)
+    if a.target == "sd":
+        for rel in sorted(local):
+            if rel.startswith("printer/"):
+                put(base, "sd", sd_dir + "/" + rel[len("printer/"):], data(rel), a.dry_run)
+        put(base, "sd", sd_dir + "/mode.json", mode, a.dry_run)
+        # Off-card files: the switch button (flash only) and, in standalone,
+        # the root redirect. Flash may be full or failing, so warn, don't stop.
+        for rel in sorted(local):
+            if rel.startswith("printer/"):
+                continue
+            body = data(rel)
+            if rel == "js/ext/printer-switch/index.js.gz":
+                body = point_switch(body, sd_url)
+            elif rel == "index.html.gz":
+                body = gzip.compress(gzip.decompress(body).replace(b"/printer/", sd_url.encode()), 9, mtime=0)
+            try:
+                put(base, "flash", rel, body, a.dry_run)
+                # Read it back: a board with a failing LittleFS has answered
+                # OK without keeping the file (parent-requirements B3).
+                if not a.dry_run and fetch(base, "api/fs/" + enc(rel)) != body:
+                    raise OSError("the board answered OK but the file is not there")
+            except (urllib.error.URLError, OSError) as e:
+                print("  warning: %s not written to flash (%s)" % (rel, e), file=sys.stderr)
+        print("done: %s%s" % (base, sd_url))
+        return
+    for rel in sorted(local):
+        put(base, "flash", rel, data(rel), a.dry_run)
+    put(base, "flash", "printer/mode.json", mode, a.dry_run)
     if a.sync:
         have = set(local)
         stale = [p for p in remote_gz(base, "printer") if p not in have]

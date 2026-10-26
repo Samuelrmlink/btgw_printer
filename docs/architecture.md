@@ -25,11 +25,13 @@ browser (web/)  --WS /ws + POST /api/op-->  printer_hub (PEX)  --pex_call-->  dr
 |---|---|---|
 | Firmware base | `btgw/configs/pico2w_sd_classic_defconfig` + `configs/companion.fragment` | `btgw/configs/pico2w_classic_defconfig` + `configs/standalone.fragment` |
 | Parent web UI | kept, plus `js/ext/printer-switch/` (a "Printer" button) | not uploaded |
-| Our app | `/printer/` (LittleFS `printer/`; SD once parent R2 lands) | `/printer/`; `/` redirects there |
+| Our app | `/printer/` (LittleFS `printer/`), or `/sd/apps/printer/` (card `apps/printer/`, `deploy.py --target sd`; needs parent R2) | `/printer/`; `/` redirects there |
 | Switch button in our app | "BTGW" back to `/` | hidden |
 
-`printer/mode.json` (`{"mode":"companion"|"standalone"}`) is written by
-`tools/deploy.py` and tells the app which buttons to show.
+`mode.json` (`{"mode":"companion"|"standalone"}`) is written by
+`tools/deploy.py` next to the app (`printer/mode.json` on flash, `apps/printer/mode.json`
+on the card) and tells the app which buttons to show. The app fetches it
+from beside itself, then falls back to flash `printer/mode.json`.
 
 ## Files on the board
 
