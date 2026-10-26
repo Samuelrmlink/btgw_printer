@@ -1,0 +1,1465 @@
+import { apiBase, fetchMedia, fetchStatus, postPrint } from "./api.js";
+import { Editor, defaultBarcode, defaultImage, defaultQr, defaultText } from "./editor.js";
+import { boxOverflows, rasterize, rotateSwapsAxes } from "./raster.js";
+import { fromDocument, toDocument } from "./doc.js";
+import { bindPicker } from "./files.js";
+import { bindWifiSettings } from "./wifi.js";
+import { bindCalibrate } from "./cal.js";
+import { code128Error } from "./barcode.js";
+import { qrError } from "./qr.js";
+import { importImageFile } from "./image.js";
+import "./barcode.js";
+import "./qr.js";
+import "./image.js";
+
+const SCALE_MAX = 2;
+const STORE = "pm220-editor-v1";
+const FALLBACK_PAGE = {
+    width_dots: 384,
+    height_dots: 240,
+    width_bytes: 48,
+    bitmap_bytes: 11520,
+    dpi: 203,
+    width_mm: 50,
+    height_mm: 30,
+    safe_rect: { x0: 32, y0: 32, x1: 351, y1: 207 },
+    after_offset: { origin_x: 0, origin_y: 24, width_dots: 384, height_dots: 216 },
+};
+
+const TITLES = {
+    text: "Text box",
+    qr: "QR code",
+    barcode1d: "Barcode",
+    image: "Image",
+};
+
+const $ = (id) => document.getElementById(id);
+const INT_RE = /^-?\d+$/;
+
+const NAV_KEYS = new Set([
+    "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+    "Home", "End", "PageUp", "PageDown", "F1",
+]);
+
+document.addEventListener("keydown", (e) => {
+    if (NAV_KEYS.has(e.key) || e.key === "?" ) {
+        document.documentElement.classList.add("kbd-nav");
+        return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+        document.documentElement.classList.add("kbd-nav");
+        return;
+    }
+    if (e.key.length === 1 && "hjklnNq".includes(e.key)) {
+        document.documentElement.classList.add("kbd-nav");
+    }
+}, true);
+
+const VIEWPORT_LOCK =
+    "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+
+function lockViewport() {
+    const meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) {
+        return;
+    }
+    meta.setAttribute(
+        "content",
+        "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes",
+    );
+    requestAnimationFrame(() => {
+        meta.setAttribute("content", VIEWPORT_LOCK);
+    });
+}
+
+lockViewport();
+window.addEventListener("pageshow", lockViewport);
+window.addEventListener("orientationchange", () => setTimeout(lockViewport, 50));
+
+for (const ev of ["gesturestart", "gesturechange", "gestureend"]) {
+    document.addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+}
+
+document.addEventListener("touchstart", (e) => {
+    if (e.touches.length > 1) {
+        e.preventDefault();
+    }
+}, { passive: false });
+
+document.addEventListener("touchmove", (e) => {
+    if (e.touches.length > 1 || (typeof e.scale === "number" && e.scale !== 1)) {
+        e.preventDefault();
+    }
+}, { passive: false });
+
+let lastTapAt = 0;
+document.addEventListener("touchend", (e) => {
+    if (e.target && e.target.closest && e.target.closest("input, textarea, select, button, a")) {
+        lastTapAt = Date.now();
+        return;
+    }
+    const now = Date.now();
+    if (now - lastTapAt < 350) {
+        e.preventDefault();
+    }
+    lastTapAt = now;
+}, { passive: false });
+
+function setField(id, value) {
+    const el = $(id);
+    if (document.activeElement === el) {
+        return;
+    }
+    el.value = value;
+}
+
+function parseIntField(id) {
+    const el = $(id);
+    const raw = String(el.value || "").trim();
+    if (!INT_RE.test(raw)) {
+        return null;
+    }
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+}
+
+function isNumField(el) {
+    if (!el || el.tagName !== "INPUT") {
+        return false;
+    }
+    const mode = el.getAttribute("inputmode");
+    return mode === "numeric" || mode === "decimal";
+}
+
+function numBounds(el) {
+    switch (el.id) {
+        case "size":
+            return [4, 240];
+        case "bc-font":
+            return [4, 72];
+        case "bc-off":
+            return [-240, 240];
+        case "ox":
+            return [0, page.width_dots];
+        case "oy":
+            return [0, page.height_dots];
+        case "ow":
+            return [8, page.width_dots];
+        case "oh":
+            return [8, page.height_dots];
+        case "cal-ox":
+        case "cal-oy":
+        case "cal-ph":
+            return [-80, 80];
+        case "cal-sx0":
+        case "cal-sy0":
+            return [0, 380];
+        case "cal-sx1":
+            return [3, 383];
+        case "cal-sy1":
+            return [3, 239];
+        case "cal-offx":
+        case "cal-offy":
+            return [-10, 10];
+        case "cal-gap":
+            return [0, 10];
+        default:
+            return [null, null];
+    }
+}
+
+function stepNumField(el, delta) {
+    if (!el || el.disabled || !isNumField(el)) {
+        return;
+    }
+    const [lo, hi] = numBounds(el);
+    if (el.id === "cal-offx" || el.id === "cal-offy" || el.id === "cal-gap") {
+        let n = Number(el.value);
+        if (!Number.isFinite(n)) {
+            n = 0;
+        }
+        n += delta * 0.25;
+        n = Math.round(n * 100) / 100;
+        if (lo != null && n < lo) {
+            n = lo;
+        }
+        if (hi != null && n > hi) {
+            n = hi;
+        }
+        el.value = String(n);
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+    }
+    let n = parseIntField(el.id);
+    if (n == null) {
+        n = 0;
+    }
+    n += delta;
+    if (lo != null && n < lo) {
+        n = lo;
+    }
+    if (hi != null && n > hi) {
+        n = hi;
+    }
+    el.value = String(n);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+const preview = $("preview");
+const pctx = preview.getContext("2d", { willReadFrequently: true });
+pctx.imageSmoothingEnabled = false;
+
+let page = FALLBACK_PAGE;
+let packed = new Uint8Array(FALLBACK_PAGE.bitmap_bytes);
+packed.fill(0xff);
+
+const editor = new Editor($("stage"), {
+    page,
+    safe: page.safe_rect,
+    scale: SCALE_MAX,
+    onChange: () => {
+        paint();
+        fillForm();
+        saveScratch();
+        markNudgeFocus();
+        updateStageKeys();
+        if (isPayloadTyping()) {
+            clearTimeout(histTypeTimer);
+            histTypeTimer = setTimeout(histRecord, 400);
+        } else {
+            histRecord();
+        }
+    },
+    onSelect: (box) => focusPayload(box),
+});
+
+const HIST_MAX = 50;
+const history = { past: [], present: null, future: [], applying: false };
+let histHold = false;
+let histTypeTimer = 0;
+
+function isPayloadTyping() {
+    const el = document.activeElement;
+    if (!el) {
+        return false;
+    }
+    if (el.tagName === "TEXTAREA") {
+        return true;
+    }
+    if (el.tagName === "INPUT" && el.type !== "checkbox" && el.type !== "button" && !isNumField(el)) {
+        return true;
+    }
+    return false;
+}
+
+function histSnap() {
+    return JSON.stringify({
+        boxes: editor.boxes,
+        selectedId: editor.selectedId,
+    });
+}
+
+function histBoxesKey(snap) {
+    if (!snap) {
+        return "";
+    }
+    try {
+        return JSON.stringify(JSON.parse(snap).boxes);
+    } catch {
+        return snap;
+    }
+}
+
+function syncHistButtons() {
+    const undo = $("undo");
+    const redo = $("redo");
+    if (undo) {
+        undo.disabled = history.past.length === 0;
+    }
+    if (redo) {
+        redo.disabled = history.future.length === 0;
+    }
+}
+
+function histRecord() {
+    if (history.applying || editor.drag || histHold) {
+        return;
+    }
+    const snap = histSnap();
+    if (histBoxesKey(snap) === histBoxesKey(history.present)) {
+        history.present = snap;
+        return;
+    }
+    if (history.present != null) {
+        history.past.push(history.present);
+        if (history.past.length > HIST_MAX) {
+            history.past.shift();
+        }
+    }
+    history.present = snap;
+    history.future = [];
+    syncHistButtons();
+}
+
+function histApply(snap) {
+    const data = JSON.parse(snap);
+    history.applying = true;
+    editor.load(data.boxes);
+    if (data.selectedId != null) {
+        editor.select(data.selectedId);
+    }
+    history.applying = false;
+}
+
+function histUndo() {
+    if (!history.past.length) {
+        return;
+    }
+    history.future.push(histSnap());
+    history.present = history.past.pop();
+    histApply(history.present);
+    syncHistButtons();
+}
+
+function histRedo() {
+    if (!history.future.length) {
+        return;
+    }
+    history.past.push(histSnap());
+    history.present = history.future.pop();
+    histApply(history.present);
+    syncHistButtons();
+}
+
+function histReset() {
+    history.past = [];
+    history.future = [];
+    history.present = histSnap();
+    syncHistButtons();
+}
+
+function histBeginHold() {
+    histHold = true;
+}
+
+function histEndHold() {
+    if (!histHold) {
+        return;
+    }
+    histHold = false;
+    histRecord();
+}
+
+function rotationPatch(box, next) {
+    const patch = { rotate: next };
+    if (rotateSwapsAxes(next) !== rotateSwapsAxes(box.rotate)) {
+        patch.width = box.height;
+        patch.height = box.width;
+    }
+    return patch;
+}
+
+function cycleRotation() {
+    const box = editor.selected();
+    if (!box) {
+        return;
+    }
+    const rots = [0, 90, 180, 270];
+    const cur = Number(box.rotate) || 0;
+    let i = rots.indexOf(cur);
+    if (i < 0) {
+        i = 0;
+    }
+    editor.updateSelected(rotationPatch(box, rots[(i + 1) % rots.length]));
+}
+
+function duplicateSelected() {
+    const box = editor.selected();
+    if (!box) {
+        return;
+    }
+    const copy = structuredClone(box);
+    delete copy.id;
+    copy.x += 8;
+    copy.y += 8;
+    copy.pristine = false;
+    editor.addBox(copy);
+}
+
+function enterMoveMode() {
+    if (!editor.selected()) {
+        return;
+    }
+    $("nudge-pad").focus();
+    markNudgeFocus();
+}
+
+let helpIndex = 0;
+let helpRegion = "list";
+
+function helpIsOpen() {
+    const el = $("help");
+    return !!(el && !el.hidden);
+}
+
+function helpSections() {
+    return [...document.querySelectorAll("#help .help-cols section")];
+}
+
+function helpColCount() {
+    const cols = $("help")?.querySelector(".help-cols");
+    if (!cols) {
+        return 1;
+    }
+    const n = getComputedStyle(cols).gridTemplateColumns.split(" ").filter(Boolean).length;
+    return n > 1 ? n : 1;
+}
+
+function paintHelpNav() {
+    const secs = helpSections();
+    if (helpIndex >= secs.length) {
+        helpIndex = Math.max(0, secs.length - 1);
+    }
+    secs.forEach((s, i) => s.classList.toggle("current", helpRegion === "list" && i === helpIndex));
+    const closeBtn = $("help-close");
+    if (closeBtn) {
+        closeBtn.classList.toggle("nav", helpRegion === "actions");
+    }
+    if (helpRegion === "list") {
+        secs[helpIndex]?.scrollIntoView({ block: "nearest" });
+    }
+}
+
+function openHelp() {
+    const el = $("help");
+    if (!el) {
+        return;
+    }
+    el.hidden = false;
+    helpIndex = 0;
+    helpRegion = "list";
+    const panel = el.querySelector(".picker-panel");
+    if (panel) {
+        panel.setAttribute("tabindex", "-1");
+        panel.focus();
+    }
+    paintHelpNav();
+}
+
+function closeHelp() {
+    const el = $("help");
+    if (el) {
+        el.hidden = true;
+    }
+}
+
+function helpMove(dx, dy) {
+    const secs = helpSections();
+    const n = secs.length;
+    if (!n) {
+        return;
+    }
+    const cols = helpColCount();
+    if (helpRegion === "actions") {
+        if (dy < 0 || dx < 0) {
+            helpRegion = "list";
+            helpIndex = n - 1;
+            paintHelpNav();
+        }
+        return;
+    }
+    const col = helpIndex % cols;
+    const row = Math.floor(helpIndex / cols);
+    if (dx) {
+        const nextCol = col + dx;
+        if (nextCol >= 0 && nextCol < cols) {
+            const next = row * cols + nextCol;
+            if (next < n) {
+                helpIndex = next;
+            }
+        }
+    } else if (dy > 0) {
+        const next = helpIndex + cols;
+        if (next < n) {
+            helpIndex = next;
+        } else {
+            helpRegion = "actions";
+        }
+    } else if (dy < 0) {
+        const next = helpIndex - cols;
+        if (next >= 0) {
+            helpIndex = next;
+        }
+    }
+    paintHelpNav();
+}
+
+function overlayOpen() {
+    return pickerOpen() || (typeof wifiUi !== "undefined" && wifiUi.isOpen()) ||
+        (typeof calUi !== "undefined" && calUi.isOpen()) ||
+        ($("wifi-sub") && !$("wifi-sub").hidden) || helpIsOpen();
+}
+
+function pickerOpen() {
+    return typeof picker !== "undefined" && picker.isOpen();
+}
+
+function updateStageKeys() {
+    const el = $("stage-keys");
+    if (!el) {
+        return;
+    }
+    if (editor.selected()) {
+        el.innerHTML =
+            "<span><kbd>m</kbd> move</span>" +
+            "<span><kbd>r</kbd> rotate</span>" +
+            "<span><kbd>d</kbd> duplicate</span>" +
+            "<span><kbd>←↑→↓</kbd> nudge</span>" +
+            "<span><kbd>⇧</kbd>+arrows resize</span>" +
+            "<span><kbd>Del</kbd> delete</span>" +
+            "<span><kbd>Esc</kbd>/<kbd>q</kbd> deselect</span>" +
+            "<span><kbd>?</kbd> all keys</span>";
+    } else {
+        el.innerHTML =
+            "<span><kbd>n</kbd> next</span>" +
+            "<span><kbd>N</kbd> prev</span>" +
+            "<span><kbd>Space</kbd> select</span>" +
+            "<span><kbd>?</kbd> all keys</span>";
+    }
+}
+
+function viewScale() {
+    const wrap = $("stage-wrap");
+    if (!wrap || wrap.clientWidth < 32) {
+        return SCALE_MAX;
+    }
+    const cs = getComputedStyle(wrap);
+    const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+    const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    const availW = Math.max(64, wrap.clientWidth - padX);
+    const stacked = window.matchMedia("(max-width: 900px)").matches;
+    let availH;
+    if (stacked) {
+        const headerH = document.querySelector("header").offsetHeight;
+        availH = Math.max(80, window.innerHeight - headerH - padY - 72);
+    } else {
+        availH = Math.max(80, wrap.clientHeight - padY);
+    }
+    const s = Math.min(availW / page.width_dots, availH / page.height_dots);
+    return Math.min(SCALE_MAX, Math.max(0.5, s));
+}
+
+function layoutGuides() {
+    const s = viewScale();
+    editor.scale = s;
+    const stage = $("stage");
+    stage.style.width = `${page.width_dots * s}px`;
+    stage.style.height = `${page.height_dots * s}px`;
+    preview.style.width = `${page.width_dots * s}px`;
+    preview.style.height = `${page.height_dots * s}px`;
+    const r = page.safe_rect;
+    const safe = $("safe");
+    safe.style.left = `${r.x0 * s}px`;
+    safe.style.top = `${r.y0 * s}px`;
+    safe.style.width = `${(r.x1 - r.x0 + 1) * s}px`;
+    safe.style.height = `${(r.y1 - r.y0 + 1) * s}px`;
+    const cropH = page.height_dots - (page.after_offset?.height_dots ?? page.height_dots);
+    const crop = $("crop");
+    if (cropH > 0) {
+        crop.style.top = `${(page.height_dots - cropH) * s}px`;
+        crop.style.height = `${cropH * s}px`;
+        crop.hidden = false;
+    } else {
+        crop.hidden = true;
+    }
+    editor.syncDom();
+}
+
+function applyMedia(media) {
+    if (!media || !media.width_dots) {
+        return;
+    }
+    page = {
+        width_dots: media.width_dots,
+        height_dots: media.height_dots,
+        width_bytes: media.width_bytes,
+        bitmap_bytes: media.bitmap_bytes,
+        dpi: media.dpi,
+        width_mm: media.width_mm,
+        height_mm: media.height_mm,
+        safe_rect: media.safe_rect,
+        after_offset: media.after_offset,
+    };
+    preview.width = page.width_dots;
+    preview.height = page.height_dots;
+    editor.setPage(page, page.safe_rect);
+    layoutGuides();
+    paint();
+}
+
+function paint() {
+    const r = rasterize(page, editor.boxes, () => paint());
+    packed = r.packed;
+    const w = page.width_dots;
+    const h = page.height_dots;
+    const wb = page.width_bytes;
+    const img = pctx.createImageData(w, h);
+    const d = img.data;
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const white = packed[y * wb + (x >> 3)] & (0x80 >> (x & 7));
+            const v = white ? 255 : 0;
+            const i = (y * w + x) * 4;
+            d[i] = d[i + 1] = d[i + 2] = v;
+            d[i + 3] = 255;
+        }
+    }
+    pctx.putImageData(img, 0, 0);
+}
+
+function payloadEl(box) {
+    if (!box) {
+        return null;
+    }
+    if (box.type === "qr") {
+        return $("qr-payload");
+    }
+    if (box.type === "barcode1d") {
+        return $("bc-payload");
+    }
+    if (box.type === "text") {
+        return $("text");
+    }
+    return null;
+}
+
+function focusPayload(box) {
+    if (!box) {
+        return;
+    }
+    setTimeout(() => {
+        $("nudge-pad").focus();
+        markNudgeFocus();
+    }, 0);
+}
+
+function isNudgeFocused() {
+    const pad = $("nudge-pad");
+    const el = document.activeElement;
+    return el === pad || (pad && pad.contains(el));
+}
+
+function markNudgeFocus() {
+    const on = isNudgeFocused();
+    const boxEl = document.querySelector(".tbox.selected");
+    if (boxEl) {
+        boxEl.classList.toggle("nudge", on);
+    }
+}
+
+function nudgeSelected(dx, dy) {
+    const box = editor.selected();
+    if (!box) {
+        return;
+    }
+    editor.updateSelected({ x: box.x + dx, y: box.y + dy });
+}
+
+function resizeSelected(dw, dh) {
+    const box = editor.selected();
+    if (!box) {
+        return;
+    }
+    if (box.type === "qr") {
+        const d = dw !== 0 ? dw : dh;
+        editor.updateSelected({ width: box.width + d, height: box.height + d });
+        return;
+    }
+    editor.updateSelected({ width: box.width + dw, height: box.height + dh });
+}
+
+function isShownControl(el) {
+    if (!el || el.disabled || el.tabIndex < 0) {
+        return false;
+    }
+    if (el.closest("[hidden]")) {
+        return false;
+    }
+    const st = getComputedStyle(el);
+    if (st.display === "none" || st.visibility === "hidden") {
+        return false;
+    }
+    return true;
+}
+
+function editorTabOrder(box) {
+    const pad = $("nudge-pad");
+    const pay = payloadEl(box);
+    const skip = new Set(["font", "del", "pane-close"]);
+    const rest = [];
+    const root = $("editor-pane");
+    for (const el of root.querySelectorAll("input, select, textarea, button, [tabindex]")) {
+        if (el === pad || el === pay || skip.has(el.id) || el.classList.contains("nudge-btn")) {
+            continue;
+        }
+        if (!isShownControl(el)) {
+            continue;
+        }
+        rest.push(el);
+    }
+    const order = [];
+    order.push(pad);
+    if (pay) {
+        order.push(pay);
+    }
+    order.push(...rest);
+    return order;
+}
+
+function moveEditorFocus(dir) {
+    const box = editor.selected();
+    if (!box) {
+        return false;
+    }
+    const order = editorTabOrder(box);
+    if (!order.length) {
+        return false;
+    }
+    const active = document.activeElement;
+    let i = order.findIndex((el) => el === active || el.contains(active));
+    if (i < 0) {
+        i = dir > 0 ? -1 : 0;
+    }
+    const next = order[(i + dir + order.length) % order.length];
+    if (next) {
+        next.focus();
+        markNudgeFocus();
+        return true;
+    }
+    return false;
+}
+
+function payloadWarning(box) {
+    if (!box) {
+        return "";
+    }
+    if (box.type === "qr") {
+        return qrError(box.payload);
+    }
+    if (box.type === "barcode1d") {
+        return code128Error(box.payload);
+    }
+    return "";
+}
+
+function fillForm() {
+    const box = editor.selected();
+    $("add-pane").hidden = !!box;
+    $("editor-pane").hidden = !box;
+    $("del").disabled = !box;
+    const paneHead = $("pane-head");
+    const paneClose = $("pane-close");
+    const paneTitle = $("pane-title");
+    if (paneHead) {
+        paneHead.hidden = !box;
+    }
+    if (paneClose) {
+        paneClose.hidden = !box;
+    }
+    if (paneTitle) {
+        paneTitle.textContent = box ? (TITLES[box.type] || box.type) : "Add object";
+    }
+    const clip = !!(box && box.type === "text" && !box.wrap && !box.autoSize);
+    const overflow = !!(box && boxOverflows(box, editor.safe));
+    const payload = payloadWarning(box);
+    $("warn-clip").hidden = !clip;
+    $("warn-overflow").hidden = !overflow;
+    $("warn-payload").hidden = !payload;
+    $("warn-payload").textContent = payload || "";
+    $("warn").hidden = !clip && !overflow && !payload;
+    $("form-text").hidden = !box || box.type !== "text";
+    $("form-qr").hidden = !box || box.type !== "qr";
+    $("form-barcode").hidden = !box || box.type !== "barcode1d";
+    $("form-image").hidden = !box || box.type !== "image";
+    $("advanced-qr").hidden = !$("advanced").checked || !box || box.type !== "qr";
+    if (!box) {
+        return;
+    }
+    $("rotate").value = String(box.rotate || 0);
+    $("ignore-safe").checked = !!box.ignoreSafe;
+    setField("ox", box.x);
+    setField("oy", box.y);
+    setField("ow", box.width);
+    setField("oh", box.height);
+    if (box.type === "text") {
+        $("size").disabled = !!box.autoSize;
+        setField("text", box.text);
+        $("font").value = box.font || "Arial";
+        setField("size", box.size);
+        $("autoSize").checked = !!box.autoSize;
+        $("wrap").checked = !!box.wrap;
+        $("bold").checked = !!box.bold;
+        $("italic").checked = !!box.italic;
+        $("underline").checked = !!box.underline;
+        $("align").value = box.align;
+        $("valign").value = box.valign;
+    } else if (box.type === "qr") {
+        setField("qr-payload", box.payload || "");
+        $("qr-pixel").checked = !!box.pixelPerfect;
+        $("qr-ecc").value = box.ecc || "M";
+    } else if (box.type === "barcode1d") {
+        setField("bc-payload", box.payload || "");
+        $("bc-sym").value = box.symbology || "code128";
+        $("bc-text").checked = box.showText !== false;
+        setField("bc-font", box.textSize ?? 12);
+        setField("bc-off", box.textOffset ?? 7);
+    } else if (box.type === "image") {
+        $("img-dither").checked = box.dither !== false;
+    }
+}
+
+function readForm() {
+    const box = editor.selected();
+    if (!box) {
+        return {};
+    }
+    const newRot = Number($("rotate").value);
+    const patch = {
+        rotate: newRot,
+        ignoreSafe: $("ignore-safe").checked,
+    };
+    const x = parseIntField("ox");
+    const y = parseIntField("oy");
+    const w = parseIntField("ow");
+    const h = parseIntField("oh");
+    if (x != null) {
+        patch.x = x;
+    }
+    if (y != null) {
+        patch.y = y;
+    }
+    if (w != null) {
+        patch.width = w;
+    }
+    if (h != null) {
+        patch.height = h;
+    }
+    const swapped = rotationPatch(box, newRot);
+    if (swapped.width != null) {
+        patch.width = swapped.width;
+        patch.height = swapped.height;
+    }
+    if (box.type === "text") {
+        Object.assign(patch, {
+            text: $("text").value,
+            font: $("font").value,
+            autoSize: $("autoSize").checked,
+            wrap: $("wrap").checked,
+            bold: $("bold").checked,
+            italic: $("italic").checked,
+            underline: $("underline").checked,
+            align: $("align").value,
+            valign: $("valign").value,
+        });
+        const size = parseIntField("size");
+        if (size != null) {
+            patch.size = size;
+        }
+    } else if (box.type === "qr") {
+        Object.assign(patch, {
+            payload: $("qr-payload").value,
+            ecc: $("qr-ecc").value,
+            pixelPerfect: $("qr-pixel").checked,
+        });
+        if (patch.width != null && patch.width !== patch.height) {
+            patch.height = patch.width;
+        }
+    } else if (box.type === "barcode1d") {
+        Object.assign(patch, {
+            payload: $("bc-payload").value,
+            symbology: $("bc-sym").value,
+            showText: $("bc-text").checked,
+        });
+        const textSize = parseIntField("bc-font");
+        const textOffset = parseIntField("bc-off");
+        if (textSize != null) {
+            patch.textSize = textSize;
+        }
+        if (textOffset != null) {
+            patch.textOffset = textOffset;
+        }
+    } else if (box.type === "image") {
+        patch.dither = $("img-dither").checked;
+    }
+    return patch;
+}
+
+function saveScratch() {
+    try {
+        localStorage.setItem(STORE, JSON.stringify(toDocument(page, editor.boxes)));
+    } catch {
+        /* quota */
+    }
+}
+
+function restore() {
+    try {
+        const raw = localStorage.getItem(STORE);
+        if (raw) {
+            editor.load(fromDocument(JSON.parse(raw)));
+        }
+    } catch {
+        /* ignore */
+    }
+}
+
+function syncAdvanced() {
+    const on = $("advanced").checked;
+    const box = editor.selected();
+    $("coords").hidden = !on;
+    $("advanced-qr").hidden = !on || !box || box.type !== "qr";
+}
+
+$("editor-pane").addEventListener("input", (e) => {
+    const box = editor.selected();
+    if (!box) {
+        return;
+    }
+    if (e.target && (e.target.id === "text" || e.target.id === "qr-payload" || e.target.id === "bc-payload")) {
+        box.pristine = false;
+    }
+    if (e.target && e.target.id === "advanced") {
+        try {
+            localStorage.setItem(STORE + "-advanced", $("advanced").checked ? "1" : "0");
+        } catch {
+            /* ignore */
+        }
+        syncAdvanced();
+        return;
+    }
+    editor.updateSelected(readForm());
+});
+
+$("editor-pane").addEventListener("focusout", () => {
+    setTimeout(fillForm, 0);
+});
+
+$("add-text").addEventListener("click", () => editor.addBox(defaultText(page, editor.safe)));
+$("add-qr").addEventListener("click", () => editor.addBox(defaultQr(page, editor.safe)));
+$("add-barcode").addEventListener("click", () => editor.addBox(defaultBarcode(page, editor.safe)));
+$("add-image").addEventListener("click", () => $("image-file").click());
+$("replace-image").addEventListener("click", () => $("image-file").click());
+
+$("image-file").addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) {
+        return;
+    }
+    try {
+        const { png } = await importImageFile(file, () => paint());
+        const sel = editor.selected();
+        if (sel && sel.type === "image") {
+            editor.updateSelected({ png });
+        } else {
+            editor.addBox(defaultImage(page, editor.safe, png));
+        }
+    } catch (err) {
+        setStatus(String(err.message || err), "err");
+    }
+});
+
+$("del").addEventListener("click", () => editor.removeSelected());
+$("dup").addEventListener("click", () => duplicateSelected());
+$("undo").addEventListener("click", () => histUndo());
+$("redo").addEventListener("click", () => histRedo());
+$("help-btn").addEventListener("click", () => openHelp());
+$("help-close").addEventListener("click", () => closeHelp());
+$("help-backdrop").addEventListener("click", () => closeHelp());
+$("pane-close")?.addEventListener("click", () => editor.select(null));
+
+$("obj-next").addEventListener("click", () => editor.cyclePreview(1));
+$("obj-prev").addEventListener("click", () => editor.cyclePreview(-1));
+$("obj-select").addEventListener("click", () => editor.confirmPreview());
+
+let picoName = "";
+const picker = bindPicker({
+    getDoc: () => toDocument(page, editor.boxes),
+    loadDoc: (objects) => {
+        editor.load(objects);
+        histReset();
+    },
+    picoName: () => picoName,
+    setPicoName: (name) => { picoName = name; },
+    setStatus,
+});
+const wifiUi = bindWifiSettings({ setStatus });
+const calUi = bindCalibrate({ setStatus, applyMedia });
+
+$("file").addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (picker && picker.close) {
+        picker.close();
+    }
+    if (!file) {
+        return;
+    }
+    try {
+        const text = await file.text();
+        editor.load(fromDocument(JSON.parse(text)));
+        histReset();
+        picoName = file.name.replace(/\.gz$/i, "");
+        setStatus(`opened ${picoName}`, "ok");
+    } catch (err) {
+        setStatus(String(err.message || err), "err");
+    }
+});
+
+document.addEventListener("keydown", (e) => {
+    if (helpIsOpen()) {
+        if (e.key === "Escape" || e.key === "q" || e.key === "?" || e.key === "F1") {
+            e.preventDefault();
+            closeHelp();
+            return;
+        }
+        if (e.key === "Tab") {
+            e.preventDefault();
+            helpRegion = e.shiftKey
+                ? (helpRegion === "actions" ? "list" : "actions")
+                : (helpRegion === "list" ? "actions" : "list");
+            paintHelpNav();
+            return;
+        }
+        if (e.key === "ArrowDown" || e.key === "j") {
+            e.preventDefault();
+            helpMove(0, 1);
+            return;
+        }
+        if (e.key === "ArrowUp" || e.key === "k") {
+            e.preventDefault();
+            helpMove(0, -1);
+            return;
+        }
+        if (e.key === "ArrowRight" || e.key === "l") {
+            e.preventDefault();
+            helpMove(1, 0);
+            return;
+        }
+        if (e.key === "ArrowLeft" || e.key === "h") {
+            e.preventDefault();
+            helpMove(-1, 0);
+            return;
+        }
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            if (helpRegion === "actions") {
+                closeHelp();
+            }
+        }
+        return;
+    }
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.altKey && e.key.toLowerCase() === "o") {
+        if (overlayOpen()) {
+            return;
+        }
+        e.preventDefault();
+        picker.open("open");
+        return;
+    }
+    if (mod && !e.altKey && e.key.toLowerCase() === "s") {
+        if (overlayOpen()) {
+            return;
+        }
+        e.preventDefault();
+        if (e.shiftKey || !picoName) {
+            picker.open("save");
+        } else {
+            picker.saveCurrent();
+        }
+        return;
+    }
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "p") {
+        if (overlayOpen()) {
+            return;
+        }
+        e.preventDefault();
+        sendPrint();
+        return;
+    }
+    if (overlayOpen()) {
+        return;
+    }
+    if (mod && !e.altKey && e.key.toLowerCase() === "z") {
+        if (isPayloadTyping()) {
+            return;
+        }
+        e.preventDefault();
+        if (e.shiftKey) {
+            histRedo();
+        } else {
+            histUndo();
+        }
+        return;
+    }
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "x") {
+        if (isPayloadTyping()) {
+            return;
+        }
+        e.preventDefault();
+        histRedo();
+        return;
+    }
+    if (!isPayloadTyping() && (e.key === "?" || e.key === "F1")) {
+        e.preventDefault();
+        openHelp();
+        return;
+    }
+    const box = editor.selected();
+    if (box && e.key === "Tab") {
+        e.preventDefault();
+        moveEditorFocus(e.shiftKey ? -1 : 1);
+        return;
+    }
+    const typing = e.target && (
+        e.target.tagName === "TEXTAREA" ||
+        (e.target.tagName === "INPUT" && !isNumField(e.target))
+    );
+    if (!typing && (e.key === "n" || e.key === "N")) {
+        e.preventDefault();
+        if (box) {
+            moveEditorFocus(e.key === "N" ? -1 : 1);
+        } else {
+            editor.cyclePreview(e.key === "N" ? -1 : 1);
+        }
+        return;
+    }
+    if (!box && (e.key === " " || e.key === "Enter")) {
+        const tag = e.target && e.target.tagName;
+        if (tag !== "BUTTON" && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") {
+            e.preventDefault();
+            editor.confirmPreview();
+            return;
+        }
+    }
+    const inField = e.target && (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT");
+    if (e.key === "Delete" && box) {
+        e.preventDefault();
+        editor.removeSelected();
+        return;
+    }
+    if (inField) {
+        if (isNumField(e.target) && !e.target.disabled) {
+            const step = e.shiftKey ? 8 : 1;
+            let d = 0;
+            if (e.key === "ArrowUp" || e.key === "k") {
+                d = step;
+            } else if (e.key === "ArrowDown" || e.key === "j") {
+                d = -step;
+            } else if (e.key === "K") {
+                d = 8;
+            } else if (e.key === "J") {
+                d = -8;
+            }
+            if (d) {
+                e.preventDefault();
+                stepNumField(e.target, d);
+                return;
+            }
+        }
+        if (e.key === "Escape" || (e.key === "q" && !isPayloadTyping())) {
+            e.target.blur();
+            editor.select(null);
+        }
+        return;
+    }
+    if (isNudgeFocused() && box) {
+        const keys = {
+            ArrowLeft: [-1, 0],
+            ArrowRight: [1, 0],
+            ArrowUp: [0, -1],
+            ArrowDown: [0, 1],
+            h: [-1, 0],
+            l: [1, 0],
+            k: [0, -1],
+            j: [0, 1],
+            H: [-1, 0],
+            L: [1, 0],
+            K: [0, -1],
+            J: [0, 1],
+        };
+        const delta = keys[e.key];
+        if (delta) {
+            e.preventDefault();
+            histBeginHold();
+            if (e.shiftKey) {
+                resizeSelected(delta[0], delta[1]);
+            } else {
+                nudgeSelected(delta[0], delta[1]);
+            }
+            return;
+        }
+        if (e.key === "Backspace") {
+            e.preventDefault();
+            return;
+        }
+    }
+    if (e.key === "Backspace" && box) {
+        e.preventDefault();
+        editor.removeSelected();
+    }
+    if (box && e.key === "d") {
+        e.preventDefault();
+        duplicateSelected();
+        return;
+    }
+    if (box && e.key === "m") {
+        e.preventDefault();
+        enterMoveMode();
+        return;
+    }
+    if (box && e.key === "r") {
+        e.preventDefault();
+        cycleRotation();
+        return;
+    }
+    if (e.key === "Escape" || e.key === "q") {
+        editor.select(null);
+    }
+});
+
+document.addEventListener("keyup", (e) => {
+    if (histHold && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" ||
+            e.key === "ArrowDown" || "hjklHJKL".includes(e.key))) {
+        histEndHold();
+    }
+});
+
+$("nudge-pad").addEventListener("focusin", markNudgeFocus);
+$("nudge-pad").addEventListener("focusout", () => setTimeout(markNudgeFocus, 0));
+
+{
+    let holdWait = 0;
+    let holdRep = 0;
+    const stopHold = () => {
+        clearTimeout(holdWait);
+        clearInterval(holdRep);
+        holdWait = 0;
+        holdRep = 0;
+        histEndHold();
+    };
+    $("nudge-pad").addEventListener("pointerdown", (e) => {
+        const btn = e.target.closest(".nudge-btn");
+        if (!btn || !editor.selected()) {
+            return;
+        }
+        e.preventDefault();
+        const dx = Number(btn.dataset.dx) || 0;
+        const dy = Number(btn.dataset.dy) || 0;
+        $("nudge-pad").focus();
+        histBeginHold();
+        nudgeSelected(dx, dy);
+        clearTimeout(holdWait);
+        clearInterval(holdRep);
+        holdWait = setTimeout(() => {
+            holdRep = setInterval(() => nudgeSelected(dx, dy), 50);
+        }, 300);
+        btn.setPointerCapture?.(e.pointerId);
+    });
+    $("nudge-pad").addEventListener("pointerup", stopHold);
+    $("nudge-pad").addEventListener("pointercancel", stopHold);
+    $("nudge-pad").addEventListener("lostpointercapture", stopHold);
+}
+
+{
+    let holdWait = 0;
+    let holdRep = 0;
+    const stopHold = () => {
+        clearTimeout(holdWait);
+        clearInterval(holdRep);
+        holdWait = 0;
+        holdRep = 0;
+        histEndHold();
+    };
+    $("resize-pad").addEventListener("pointerdown", (e) => {
+        const btn = e.target.closest(".nudge-btn");
+        if (!btn || !editor.selected()) {
+            return;
+        }
+        e.preventDefault();
+        const dw = Number(btn.dataset.dw) || 0;
+        const dh = Number(btn.dataset.dh) || 0;
+        histBeginHold();
+        resizeSelected(dw, dh);
+        clearTimeout(holdWait);
+        clearInterval(holdRep);
+        holdWait = setTimeout(() => {
+            holdRep = setInterval(() => resizeSelected(dw, dh), 50);
+        }, 300);
+        btn.setPointerCapture?.(e.pointerId);
+    });
+    $("resize-pad").addEventListener("pointerup", stopHold);
+    $("resize-pad").addEventListener("pointercancel", stopHold);
+    $("resize-pad").addEventListener("lostpointercapture", stopHold);
+}
+
+function wrapNumSpins() {
+    for (const el of document.querySelectorAll(
+        "aside input[inputmode='numeric'], #cal input[inputmode='numeric'], #cal input[inputmode='decimal']",
+    )) {
+        if (el.parentElement && el.parentElement.classList.contains("num-spin")) {
+            continue;
+        }
+        const wrap = document.createElement("div");
+        wrap.className = "num-spin";
+        el.replaceWith(wrap);
+        wrap.appendChild(el);
+        const col = document.createElement("div");
+        col.className = "num-spin-btns";
+        const up = document.createElement("button");
+        up.type = "button";
+        up.tabIndex = -1;
+        up.className = "num-spin-up";
+        up.setAttribute("aria-label", "Increase");
+        up.textContent = "▲";
+        const down = document.createElement("button");
+        down.type = "button";
+        down.tabIndex = -1;
+        down.className = "num-spin-down";
+        down.setAttribute("aria-label", "Decrease");
+        down.textContent = "▼";
+        col.append(up, down);
+        wrap.appendChild(col);
+    }
+    let holdWait = 0;
+    let holdRep = 0;
+    const stopHold = () => {
+        clearTimeout(holdWait);
+        clearInterval(holdRep);
+        holdWait = 0;
+        holdRep = 0;
+    };
+    const onDown = (e) => {
+        const btn = e.target.closest(".num-spin-btns button");
+        if (!btn) {
+            return;
+        }
+        const input = btn.closest(".num-spin").querySelector("input");
+        if (!input || input.disabled) {
+            return;
+        }
+        e.preventDefault();
+        const delta = btn.classList.contains("num-spin-up") ? 1 : -1;
+        stepNumField(input, delta);
+        stopHold();
+        holdWait = setTimeout(() => {
+            holdRep = setInterval(() => stepNumField(input, delta), 50);
+        }, 300);
+        btn.setPointerCapture?.(e.pointerId);
+    };
+    for (const root of document.querySelectorAll("aside, #cal")) {
+        root.addEventListener("pointerdown", onDown);
+        root.addEventListener("pointerup", stopHold);
+        root.addEventListener("pointercancel", stopHold);
+        root.addEventListener("lostpointercapture", stopHold);
+    }
+}
+
+wrapNumSpins();
+
+function setStatus(msg, kind) {
+    const el = $("status");
+    el.textContent = msg;
+    el.className = kind || "";
+}
+
+let statusTimer = 0;
+let statusBusy = false;
+let printerUp = false;
+
+function scheduleStatus() {
+    clearTimeout(statusTimer);
+    let ms = 10000;
+    if (document.hidden) {
+        ms = 20000;
+    } else if (typeof picker !== "undefined" && picker.isOpen()) {
+        ms = 30000;
+    } else if (typeof calUi !== "undefined" && calUi.isOpen()) {
+        ms = 30000;
+    } else if (typeof wifiUi !== "undefined" && wifiUi.isOpen()) {
+        ms = 15000;
+    } else if (!printerUp) {
+        ms = 5000;
+    }
+    statusTimer = setTimeout(() => refreshStatus(), ms);
+}
+
+async function refreshStatus() {
+    if (statusBusy) {
+        return null;
+    }
+    statusBusy = true;
+    try {
+        const st = await fetchStatus();
+        printerUp = !!st.printer_connected;
+        const bit = printerUp ? "printer connected" : "no printer";
+        setStatus(`${bit} · ${apiBase()}`, printerUp ? "ok" : "");
+        $("print").disabled = !printerUp;
+        return st;
+    } catch (err) {
+        printerUp = false;
+        setStatus(`API unreachable (${apiBase()})`, "err");
+        $("print").disabled = true;
+        return null;
+    } finally {
+        statusBusy = false;
+        scheduleStatus();
+    }
+}
+
+document.addEventListener("visibilitychange", () => {
+    scheduleStatus();
+});
+
+async function sendPrint() {
+    $("print").disabled = true;
+    try {
+        paint();
+        const res = await postPrint(packed);
+        setStatus(`sent ${res.bytes} bytes · ${res.print_width_dots}×${res.print_height_dots} at ${res.origin_x},${res.origin_y}`, "ok");
+    } catch (err) {
+        setStatus(String(err.message || err), "err");
+    } finally {
+        $("print").disabled = false;
+        refreshStatus();
+    }
+}
+
+$("print").addEventListener("click", () => sendPrint());
+
+async function boot() {
+    try {
+        $("advanced").checked = localStorage.getItem(STORE + "-advanced") === "1";
+    } catch {
+        $("advanced").checked = false;
+    }
+    syncAdvanced();
+    layoutGuides();
+    restore();
+    histReset();
+    updateStageKeys();
+    refreshStatus();
+    try {
+        applyMedia(await fetchMedia());
+    } catch {
+        /* fallback page */
+    }
+    layoutGuides();
+    new ResizeObserver(() => layoutGuides()).observe($("stage-wrap"));
+    window.addEventListener("resize", () => layoutGuides());
+}
+
+boot().catch((err) => {
+    setStatus(String(err.message || err), "err");
+});
