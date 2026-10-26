@@ -45,12 +45,13 @@ endef
 
 -include modules.mk
 
+.SECONDEXPANSION:
 TESTS ?= $(patsubst test_%.c,%,$(wildcard test_*.c))
 T ?= $(TESTS)
 
 all: $(addprefix run-,$(T))
 
-$(BUILD)/test_%: $(BUILD)/test_%.o $(FAKE_OBJ) $(LIB_OBJ) $(MODS_OBJ) $(EXTRA_OBJ_$*)
+$(BUILD)/test_%: $(BUILD)/test_%.o $(FAKE_OBJ) $(LIB_OBJ) $(MODS_OBJ) $$(EXTRA_OBJ_$$*)
 	$(CC) $(LDFLAGS) $^ -o $@
 
 run-%: $(BUILD)/test_%

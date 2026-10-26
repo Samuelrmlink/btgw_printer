@@ -233,3 +233,15 @@ A validated Pico W (RP2040, 2 MB flash) build. That means a 2 MB partitions, lin
 ### R10 (Nice): defconfig fragments
 
 Let `APP_DEFCONFIG` take a list (base, then fragments). Until then our `tools/build.py` does the merge itself.
+
+---
+
+## Added from feature/nelko-pm220 (2026-10-26, against b397a84)
+
+### C10 (Nice): keep going through the PIN list after the drop-key retry
+
+`cl_sess.c` `arm_retry()` sets `pin_i = 0`. An open with `pins ["0000","1234"]` and `drop_key` therefore answers `0000` on both attempts and fails, unless the peer asks twice within one attempt; it never reaches `1234`. `drivers/test/test_fakehost.c` `t_classic` shows this on the real `cl_sess.c`.
+
+The PM220 driver doesn't need a fix: it opens with `npin 0` and answers each `PEX_CL_PIN` itself. Other modules would hit the same thing, though. Either option would do:
+- resume at the next PIN after the retry;
+- document that the list restarts.
