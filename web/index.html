@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
     <title>BTGW Printer</title>
     <script>
+    /* The board serves printer/index.html at /printer as well as /printer/; the
+     * modules are relative, so make sure the page sits under its folder. */
+    if (!/\/$|\.html$/.test(location.pathname)) {
+        location.replace(location.pathname + "/" + location.search + location.hash);
+    }
     (function () {
         var m = document.querySelector('meta[name="viewport"]');
         var lock = "width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
