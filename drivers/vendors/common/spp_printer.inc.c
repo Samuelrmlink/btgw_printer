@@ -81,7 +81,7 @@ static void emit_state(void) {
     if (pex_jw_finish(&w) >= 0) { hub_emit("state", S.emit); }
 }
 
-void spp_log_rx(const uint8_t *d, size_t n) {
+static void spp_log_rx(const uint8_t *d, size_t n) {
     if (n > sizeof S.last_rx) { d += n - sizeof S.last_rx; n = sizeof S.last_rx; }
     memcpy(S.last_rx, d, n);
     S.last_rx_len = (uint8_t)n;
@@ -102,7 +102,7 @@ static int write_status(char *out, size_t cap) {
     return pex_jw_finish(&w);
 }
 
-void spp_emit_status(void) {
+static void spp_emit_status(void) {
     if (write_status(S.emit, sizeof S.emit) >= 0) { hub_emit("status", S.emit); }
 }
 
@@ -127,7 +127,7 @@ static size_t room(void) {
     return r;
 }
 
-int spp_send(const void *data, size_t len) {
+static int spp_send(const void *data, size_t len) {
     if (S.link != L_OPEN || S.h <= 0) { return PEX_ESTATE; }
     flush();
     if (len > room()) { return PEX_EBUSY; }
@@ -136,14 +136,21 @@ int spp_send(const void *data, size_t len) {
         int n = pex_bt_classic_send(S.h, p, len);
         if (n > 0) { p += n; len -= (size_t)n; }
     }
+    /* The session can refuse even with room (security level not met yet):
+     * only what was sent plus what pend holds counts. */
+    if (len > (size_t)(SPP_PEND_CAP - S.pend_len)) {
+        if (p == (const uint8_t *)data) { return PEX_EBUSY; }
+        pex_log(PEX_LOG_ERR, "%s: TX accepted less than it had room for", DRV.driver);
+        len = SPP_PEND_CAP - S.pend_len;
+    }
     memcpy(S.pend + S.pend_len, p, len);
     S.pend_len = (uint16_t)(S.pend_len + len);
     return PEX_OK;
 }
 
-int spp_job_active(void) { return S.jst != J_NONE; }
+__attribute__((unused)) static int spp_job_active(void) { return S.jst != J_NONE; }
 
-void spp_job_finished(int outcome, const char *msg) {
+static void spp_job_finished(int outcome, const char *msg) {
     if (S.jst == J_NONE) { return; }
     uint32_t id = S.job.id;
     S.jst = J_NONE;
@@ -382,7 +389,14 @@ static int feed(const uint8_t *rows, uint32_t len) {
     if (take > r) { take = (uint32_t)r; }
     take -= take % rb;
     if (take == 0) { return PEX_EBUSY; }
-    if (spp_send(rows, take) != PEX_OK) { return PEX_EBUSY; }
+    if (spp_send(rows, take) != PEX_OK) {
+        /* the session refused (stalled, or the security level isn't met):
+         * take only what pend can hold */
+        take = len;
+        if (take > (uint32_t)(SPP_PEND_CAP - S.pend_len)) { take = SPP_PEND_CAP - S.pend_len; }
+        take -= take % rb;
+        if (take == 0 || spp_send(rows, take) != PEX_OK) { return PEX_EBUSY; }
+    }
     return (int)take;
 }
 

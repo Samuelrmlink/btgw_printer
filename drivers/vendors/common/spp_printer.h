@@ -45,11 +45,11 @@ typedef struct {
     void (*status_fields)(pex_jw_t *w);
 } spp_drv_t;
 
-/* For the driver's callbacks: */
-int spp_send(const void *data, size_t len);   /* queued whole, or PEX_EBUSY */
-void spp_job_finished(int outcome, const char *msg);  /* PRN_JOB_* */
-void spp_emit_status(void);                   /* push printer.status now */
-int spp_job_active(void);
-void spp_log_rx(const uint8_t *d, size_t n);  /* keep as last_rx (hex) */
+/* For the driver's callbacks (static: one copy per module): */
+static int spp_send(const void *data, size_t len);   /* queued whole, or PEX_EBUSY */
+static void spp_job_finished(int outcome, const char *msg);  /* PRN_JOB_* */
+static void spp_emit_status(void);                   /* push printer.status now */
+__attribute__((unused)) static int spp_job_active(void);
+static void spp_log_rx(const uint8_t *d, size_t n);  /* keep as last_rx (hex) */
 
 #endif
