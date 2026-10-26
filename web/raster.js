@@ -253,6 +253,9 @@ export function drawText(ctx, box) {
     });
 }
 
+/** Luminance below this prints black (pm220_rp2_webapp used the same 160). */
+export const BLACK_THRESHOLD = 160;
+
 const drawers = { text: drawText };
 
 export function registerDrawer(type, fn) {
@@ -274,17 +277,12 @@ export function rasterize(page, objects, onReady) {
         draw(ctx, obj, onReady);
     }
     const img = ctx.getImageData(0, 0, w, h);
-    const wb = page.width_bytes;
-    const packed = new Uint8Array(wb * h);
-    packed.fill(0xff);
-    for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-            const i = (y * w + x) * 4;
-            const lum = img.data[i] * 0.299 + img.data[i + 1] * 0.587 + img.data[i + 2] * 0.114;
-            if (lum < 160) {
-                packed[y * wb + (x >> 3)] &= ~(0x80 >> (x & 7));
-            }
+    const bits = new Uint8Array(w * h);
+    for (let i = 0, p = 0; i < bits.length; i++, p += 4) {
+        const lum = img.data[p] * 0.299 + img.data[p + 1] * 0.587 + img.data[p + 2] * 0.114;
+        if (lum < BLACK_THRESHOLD) {
+            bits[i] = 1;
         }
     }
-    return { canvas, packed };
+    return { canvas, mono: { w, h, bits } };
 }

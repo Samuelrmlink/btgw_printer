@@ -1,21 +1,34 @@
-/** Pico LittleFS label picker. */
+/** Label / template picker: open, save, save as, rename, delete, download,
+ * import and export, on the board's flash or its SD card (the user picks the
+ * store; the SD tab shows only when a card is mounted). */
 
 import {
-    deleteFs,
-    downloadFsBlob,
-    getFsJson,
+    downloadStored,
     gzipUtf8,
-    listFs,
-    putFs,
-    renameFs,
-} from "./api.js";
-import { downloadDocument, fromDocument, toDocument } from "./doc.js";
+    listDir,
+    readJson,
+    removeFile,
+    renameFile,
+    sdAvailable,
+    writeFile,
+} from "./device.js";
+import { downloadDocument, fromDocument } from "./doc.js";
+import { confirmDialog } from "./dialog.js";
 
-const DIR = "labels";
+export const STORES = {
+    flash: { dir: "printer/labels", label: "Flash" },
+    sd: { dir: "sd/printer/labels", label: "SD card" },
+};
+let store = "flash";
 const $ = (id) => document.getElementById(id);
+const DIR_OF = () => STORES[store].dir;
 
 function validSegment(name) {
     return /^[A-Za-z0-9._-]+$/.test(name) && !name.startsWith(".") && name.length <= 64;
+}
+
+export function currentStore() {
+    return store;
 }
 
 export function displayName(stored) {
@@ -23,7 +36,7 @@ export function displayName(stored) {
     return base.endsWith(".gz") ? base.slice(0, -3) : base;
 }
 
-export function storedPath(display, gzip) {
+export function storedPath(display, gzip, dir = DIR_OF()) {
     let n = String(display || "").trim();
     n = n.split("/").pop() || "";
     if (!n) {
@@ -38,10 +51,10 @@ export function storedPath(display, gzip) {
     if (gzip) {
         n += ".gz";
     }
-    if (!validSegment(n) || `${DIR}/${n}`.length > 64) {
-        throw new Error("name must be letters, numbers, . _ -");
+    if (!validSegment(n) || `${dir}/${n}`.length > 128) {
+        throw new Error("name must be letters, numbers, . _ - (up to 64)");
     }
-    return `${DIR}/${n}`;
+    return `${dir}/${n}`;
 }
 
 function formatSize(n) {
@@ -62,6 +75,7 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
     const pcOpen = $("picker-pc-open");
     const pcSave = $("picker-pc-save");
     let mode = "open";
+    let nameStore = null;     // where the open label came from, for Ctrl+S
     let files = [];
     let listIndex = 0;
     let rowCol = 0;
@@ -87,8 +101,7 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
         listEl.replaceChildren();
         emptyEl.hidden = true;
         try {
-            const listing = await listFs(DIR);
-            files = listing.files || [];
+            files = (await listDir(DIR_OF())).filter((f) => !f.dir);
         } catch (err) {
             files = [];
             showErr(String(err.message || err));
@@ -215,7 +228,7 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
                 nameEl.focus();
                 return;
             }
-            openStored(`${DIR}/${info.name}`, shown);
+            openStored(`${DIR_OF()}/${info.name}`, shown);
         });
         const size = document.createElement("span");
         size.className = "picker-size";
@@ -228,11 +241,7 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
         dl.textContent = "Download";
         dl.addEventListener("click", (e) => {
             e.stopPropagation();
-            try {
-                downloadFsBlob(`${DIR}/${info.name}`, shown);
-            } catch (err) {
-                showErr(String(err.message || err));
-            }
+            downloadStored(`${DIR_OF()}/${info.name}`, shown).catch((err) => showErr(String(err.message || err)));
         });
         const ren = document.createElement("button");
         ren.type = "button";
@@ -248,11 +257,12 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
         del.textContent = "Delete";
         del.addEventListener("click", async (e) => {
             e.stopPropagation();
-            if (!confirm(`Delete ${shown}?`)) {
+            if (!(await confirmDialog(`Delete ${shown} from ${STORES[store].label}?`, { okLabel: "Delete", danger: true }))) {
+                panel().focus();
                 return;
             }
             try {
-                await deleteFs(`${DIR}/${info.name}`);
+                await removeFile(`${DIR_OF()}/${info.name}`);
                 if (picoName() === shown) {
                     setPicoName("");
                 }
@@ -284,12 +294,12 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
             try {
                 const gzip = String(info.name).endsWith(".gz");
                 const to = storedPath(input.value, gzip);
-                const from = `${DIR}/${info.name}`;
+                const from = `${DIR_OF()}/${info.name}`;
                 if (to === from) {
                     await refresh();
                     return;
                 }
-                await renameFs(from, to);
+                await renameFile(from, to);
                 if (picoName() === shown) {
                     setPicoName(displayName(to.split("/").pop()));
                 }
@@ -299,6 +309,7 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
                 await refresh();
             }
         };
+        input.dataset.escapeLocal = "1";
         input.addEventListener("keydown", (e) => {
             if (e.key === "Enter") {
                 e.preventDefault();
@@ -317,9 +328,10 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
 
     async function openStored(path, shown) {
         try {
-            const data = await getFsJson(path);
+            const data = await readJson(path);
             loadDoc(fromDocument(data));
-            setPicoName(shown);
+            setPicoName(shown, store);
+            nameStore = store;
             close();
             setStatus(`opened ${shown}`, "ok");
         } catch (err) {
@@ -334,12 +346,13 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
         const shown = displayName(path.split("/").pop());
         if (confirmReplace) {
             const exists = files.some((f) => displayName(f.name) === shown);
-            if (exists && !confirm(`Replace ${shown}?`)) {
+            if (exists && !(await confirmDialog(`Replace ${shown}?`, { okLabel: "Replace", danger: true }))) {
                 return false;
             }
         }
-        await putFs(path, gz || text);
-        setPicoName(shown);
+        await writeFile(path, gz || text);
+        setPicoName(shown, store);
+        nameStore = store;
         if (closeAfter) {
             close();
         }
@@ -361,6 +374,9 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
         if (!name) {
             return false;
         }
+        if (nameStore && nameStore !== store && STORES[nameStore] && (nameStore !== "sd" || sdAvailable())) {
+            store = nameStore;
+        }
         try {
             await writeNamed(name, { confirmReplace: false, closeAfter: false });
             return true;
@@ -370,14 +386,49 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
         }
     }
 
+    function panel() {
+        return overlay.querySelector(".picker-panel");
+    }
+
+    function paintStores() {
+        const sdOk = sdAvailable();
+        if (!sdOk && store === "sd") {
+            store = "flash";
+        }
+        for (const b of overlay.querySelectorAll(".store-tab")) {
+            const on = b.dataset.store === store;
+            b.setAttribute("aria-selected", on ? "true" : "false");
+            b.classList.toggle("active", on);
+            if (b.dataset.store === "sd") {
+                b.hidden = !sdOk;
+            }
+        }
+        $("picker-stores").hidden = !sdOk;
+    }
+
+    async function setStore(next) {
+        if (!STORES[next] || (next === "sd" && !sdAvailable())) {
+            return;
+        }
+        store = next;
+        paintStores();
+        listIndex = 0;
+        await refresh();
+    }
+
+    for (const b of overlay.querySelectorAll(".store-tab")) {
+        b.addEventListener("click", () => setStore(b.dataset.store));
+    }
+
     async function open(nextMode) {
         mode = nextMode;
+        paintStores();
         $("picker-title").textContent = mode === "save" ? "Save label" : "Open label";
         saveRow.hidden = mode !== "save";
         saveBtn.hidden = mode !== "save";
         pcOpen.hidden = mode === "save";
         pcSave.hidden = mode !== "save";
-        nameEl.value = picoName() || "label.json";
+        nameEl.value = picoName() || "label.label.json";
         overlay.hidden = false;
         listIndex = 0;
         rowCol = 0;
@@ -394,7 +445,7 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
     }
 
     pcSave.addEventListener("click", () => {
-        downloadDocument(getDoc(), picoName() || "label.pm220.json");
+        downloadDocument(getDoc(), picoName() || "label.label.json");
         close();
     });
     saveBtn.addEventListener("click", () => saveToPico());
@@ -405,7 +456,12 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
         }
     });
     document.addEventListener("keydown", (e) => {
-        if (overlay.hidden) {
+        if (overlay.hidden || !$("confirm").hidden) {
+            return;
+        }
+        if ((e.key === "[" || e.key === "]") && !typingIn(e.target)) {
+            e.preventDefault();
+            setStore(store === "sd" ? "flash" : "sd");
             return;
         }
         if ((e.key === "Escape" || (e.key === "q" && !typingIn(e.target))) &&
@@ -488,6 +544,7 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
     return {
         isOpen: () => !overlay.hidden,
         open,
+        setStore,
         close,
         saveCurrent,
     };

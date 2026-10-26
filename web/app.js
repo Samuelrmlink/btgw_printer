@@ -1,30 +1,37 @@
-import { apiBase, fetchMedia, fetchStatus, postPrint } from "./api.js";
+/** BTGW Printer: the label editor (ported from pm220_rp2_webapp's app.js) on
+ * bluetooth_rp2_webapp, for any printer a driver module supports. */
+
+import { connect as connectDevice, on, readJsonOr, refreshSd, whenInfo, ws, deviceLabel, sdAvailable } from "./device.js";
 import { Editor, defaultBarcode, defaultImage, defaultQr, defaultText } from "./editor.js";
 import { boxOverflows, rasterize, rotateSwapsAxes } from "./raster.js";
-import { fromDocument, toDocument } from "./doc.js";
+import { fromDocument, readFileText, toDocument } from "./doc.js";
 import { bindPicker } from "./files.js";
-import { bindWifiSettings } from "./wifi.js";
-import { bindCalibrate } from "./cal.js";
+import { bindNetwork } from "./network.js";
+import { bindCalibrate, testFrameMono } from "./cal.js";
 import { code128Error } from "./barcode.js";
 import { qrError } from "./qr.js";
 import { importImageFile } from "./image.js";
+import { pageFor } from "./layout.js";
+import {
+    calibrationFor, currentPrinterAddr, defaultModel, findMedia, findModel, findPrinter, loadPresets,
+    loadPrinters, loadUserMedia, mediaFor, onCatalog, saveCalibration,
+} from "./catalog.js";
+import { bindPrinters } from "./printers.js";
+import { bindMedia } from "./media.js";
+import { bindTemplates } from "./templates.js";
+import { bindPrint } from "./print.js";
+import { anyDialogOpen } from "./dialog.js";
+import { actionFor, helpHtml } from "./keymap.js";
+import { isNumField, parseIntValue, setBounds, stepNumField, wrapNumSpins, bindSpinHolds } from "./numfield.js";
+import { effectiveDefs, fillObjects, hasVars, resolveValues } from "./vars.js";
+import { counterStore } from "./templates.js";
 import "./barcode.js";
 import "./qr.js";
 import "./image.js";
 
 const SCALE_MAX = 2;
-const STORE = "pm220-editor-v1";
-const FALLBACK_PAGE = {
-    width_dots: 384,
-    height_dots: 240,
-    width_bytes: 48,
-    bitmap_bytes: 11520,
-    dpi: 203,
-    width_mm: 50,
-    height_mm: 30,
-    safe_rect: { x0: 32, y0: 32, x1: 351, y1: 207 },
-    after_offset: { origin_x: 0, origin_y: 24, width_dots: 384, height_dots: 216 },
-};
+const STORE = "btgw-printer.editor.v1";
+const LEGACY_STORE = "pm220-editor-v1";
 
 const TITLES = {
     text: "Text box",
@@ -34,8 +41,8 @@ const TITLES = {
 };
 
 const $ = (id) => document.getElementById(id);
-const INT_RE = /^-?\d+$/;
 
+// ---- pm220: keyboard-nav detection and the mobile viewport lock ----
 const NAV_KEYS = new Set([
     "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
     "Home", "End", "PageUp", "PageDown", "F1",
@@ -114,108 +121,57 @@ function setField(id, value) {
 }
 
 function parseIntField(id) {
-    const el = $(id);
-    const raw = String(el.value || "").trim();
-    if (!INT_RE.test(raw)) {
-        return null;
-    }
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
+    return parseIntValue($(id).value);
 }
 
-function isNumField(el) {
-    if (!el || el.tagName !== "INPUT") {
-        return false;
-    }
-    const mode = el.getAttribute("inputmode");
-    return mode === "numeric" || mode === "decimal";
-}
-
-function numBounds(el) {
-    switch (el.id) {
-        case "size":
-            return [4, 240];
-        case "bc-font":
-            return [4, 72];
-        case "bc-off":
-            return [-240, 240];
-        case "ox":
-            return [0, page.width_dots];
-        case "oy":
-            return [0, page.height_dots];
-        case "ow":
-            return [8, page.width_dots];
-        case "oh":
-            return [8, page.height_dots];
-        case "cal-ox":
-        case "cal-oy":
-        case "cal-ph":
-            return [-80, 80];
-        case "cal-sx0":
-        case "cal-sy0":
-            return [0, 380];
-        case "cal-sx1":
-            return [3, 383];
-        case "cal-sy1":
-            return [3, 239];
-        case "cal-offx":
-        case "cal-offy":
-            return [-10, 10];
-        case "cal-gap":
-            return [0, 10];
-        default:
-            return [null, null];
-    }
-}
-
-function stepNumField(el, delta) {
-    if (!el || el.disabled || !isNumField(el)) {
-        return;
-    }
-    const [lo, hi] = numBounds(el);
-    if (el.id === "cal-offx" || el.id === "cal-offy" || el.id === "cal-gap") {
-        let n = Number(el.value);
-        if (!Number.isFinite(n)) {
-            n = 0;
-        }
-        n += delta * 0.25;
-        n = Math.round(n * 100) / 100;
-        if (lo != null && n < lo) {
-            n = lo;
-        }
-        if (hi != null && n > hi) {
-            n = hi;
-        }
-        el.value = String(n);
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        return;
-    }
-    let n = parseIntField(el.id);
-    if (n == null) {
-        n = 0;
-    }
-    n += delta;
-    if (lo != null && n < lo) {
-        n = lo;
-    }
-    if (hi != null && n > hi) {
-        n = hi;
-    }
-    el.value = String(n);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+// Bounds for the object fields depend on the page; numfield asks through here
+// when no static bound is set (calibration registers its own).
+for (const [id, lo, hi] of [["size", 4, 240], ["bc-font", 4, 72], ["bc-off", -240, 240]]) {
+    setBounds(id, lo, hi);
 }
 
 const preview = $("preview");
 const pctx = preview.getContext("2d", { willReadFrequently: true });
 pctx.imageSmoothingEnabled = false;
 
-let page = FALLBACK_PAGE;
-let packed = new Uint8Array(FALLBACK_PAGE.bitmap_bytes);
-packed.fill(0xff);
+// ---- what the label is for ----
+const state = {
+    model: null,
+    media: null,
+    orient: 0,
+    vars: [],
+    picoName: "",
+    sessionCal: new Map(),   // "model|media" -> calibration, when no printer is saved
+};
+let page = null;
+let mono = null;
+
+function calKey(model, media) {
+    return `${model.key}|${media.id}`;
+}
+
+function currentPrinter() {
+    const addr = currentPrinterAddr();
+    return addr ? findPrinter(addr) : null;
+}
+
+function loadCal(addr, model, media) {
+    if (addr && findPrinter(addr)) {
+        return calibrationFor(addr, model, media);
+    }
+    return state.sessionCal.get(calKey(model, media)) || calibrationFor(null, model, media);
+}
+
+function computePage() {
+    const p = currentPrinter();
+    const cal = loadCal(p ? p.addr : null, state.model, state.media);
+    page = pageFor(state.model, state.media, cal, state.orient);
+    return page;
+}
 
 const editor = new Editor($("stage"), {
-    page,
-    safe: page.safe_rect,
+    page: { width_dots: 384, height_dots: 240, width_bytes: 48 },
+    safe: { x0: 0, y0: 0, x1: 383, y1: 239 },
     scale: SCALE_MAX,
     onChange: () => {
         paint();
@@ -495,13 +451,7 @@ function helpMove(dx, dy) {
 }
 
 function overlayOpen() {
-    return pickerOpen() || (typeof wifiUi !== "undefined" && wifiUi.isOpen()) ||
-        (typeof calUi !== "undefined" && calUi.isOpen()) ||
-        ($("wifi-sub") && !$("wifi-sub").hidden) || helpIsOpen();
-}
-
-function pickerOpen() {
-    return typeof picker !== "undefined" && picker.isOpen();
+    return anyDialogOpen();
 }
 
 function updateStageKeys() {
@@ -550,6 +500,9 @@ function viewScale() {
 }
 
 function layoutGuides() {
+    if (!page) {
+        return;
+    }
     const s = viewScale();
     editor.scale = s;
     const stage = $("stage");
@@ -563,11 +516,13 @@ function layoutGuides() {
     safe.style.top = `${r.y0 * s}px`;
     safe.style.width = `${(r.x1 - r.x0 + 1) * s}px`;
     safe.style.height = `${(r.y1 - r.y0 + 1) * s}px`;
-    const cropH = page.height_dots - (page.after_offset?.height_dots ?? page.height_dots);
+    const c = page.crop_rect;
     const crop = $("crop");
-    if (cropH > 0) {
-        crop.style.top = `${(page.height_dots - cropH) * s}px`;
-        crop.style.height = `${cropH * s}px`;
+    if (c) {
+        crop.style.left = `${c.x0 * s}px`;
+        crop.style.top = `${c.y0 * s}px`;
+        crop.style.width = `${(c.x1 - c.x0 + 1) * s}px`;
+        crop.style.height = `${(c.y1 - c.y0 + 1) * s}px`;
         crop.hidden = false;
     } else {
         crop.hidden = true;
@@ -575,44 +530,73 @@ function layoutGuides() {
     editor.syncDom();
 }
 
-function applyMedia(media) {
-    if (!media || !media.width_dots) {
-        return;
-    }
-    page = {
-        width_dots: media.width_dots,
-        height_dots: media.height_dots,
-        width_bytes: media.width_bytes,
-        bitmap_bytes: media.bitmap_bytes,
-        dpi: media.dpi,
-        width_mm: media.width_mm,
-        height_mm: media.height_mm,
-        safe_rect: media.safe_rect,
-        after_offset: media.after_offset,
-    };
+/** Re-derive the page (model, label size, orientation or calibration changed).
+ *  With rescale, boxes keep their place proportionally on the new page. */
+function applyPage({ rescale = false } = {}) {
+    const old = page;
+    computePage();
     preview.width = page.width_dots;
     preview.height = page.height_dots;
-    editor.setPage(page, page.safe_rect);
+    $("media-name").textContent = state.media ? state.media.name : "–";
+    if (rescale && old && editor.boxes.length && (old.width_dots !== page.width_dots || old.height_dots !== page.height_dots)) {
+        const sx = page.width_dots / old.width_dots;
+        const sy = page.height_dots / old.height_dots;
+        const sz = Math.min(sx, sy);
+        const boxes = editor.boxes.map((b) => {
+            const n = { ...b, x: Math.round(b.x * sx), y: Math.round(b.y * sy), width: Math.round(b.width * sz), height: Math.round(b.height * sz) };
+            if (n.type === "text" && n.size) {
+                n.size = Math.max(4, Math.round(n.size * sz));
+            }
+            if (n.type === "barcode1d" && n.textSize) {
+                n.textSize = Math.max(4, Math.round(n.textSize * sz));
+            }
+            return n;
+        });
+        editor.page = page;
+        editor.safe = page.safe_rect;
+        editor.load(boxes);
+    } else {
+        editor.setPage(page, page.safe_rect);
+    }
     layoutGuides();
     paint();
+    const over = editor.boxes.filter((b) => boxOverflows(b, editor.safe)).length;
+    if (rescale && over) {
+        setStatus(`${over} object(s) now extend outside the printable area`, "err");
+    }
+}
+
+function setModel(model, { keepMedia = false } = {}) {
+    state.model = model;
+    if (!keepMedia || !state.media || !mediaFor(model).some((m) => m.id === state.media.id)) {
+        const list = mediaFor(model);
+        const pref = (model.presets || []).map((id) => findMedia(id)).find(Boolean);
+        const m = pref || list[0] || state.media;
+        if (m && (!state.media || m.id !== state.media.id)) {
+            state.media = m;
+            state.orient = m.orient || 0;
+        }
+    }
+}
+
+function render(objects) {
+    const r = rasterize(page, objects, () => paint());
+    return r.mono;
 }
 
 function paint() {
-    const r = rasterize(page, editor.boxes, () => paint());
-    packed = r.packed;
+    if (!page) {
+        return;
+    }
+    mono = render(editor.boxes);
     const w = page.width_dots;
     const h = page.height_dots;
-    const wb = page.width_bytes;
     const img = pctx.createImageData(w, h);
     const d = img.data;
-    for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-            const white = packed[y * wb + (x >> 3)] & (0x80 >> (x & 7));
-            const v = white ? 255 : 0;
-            const i = (y * w + x) * 4;
-            d[i] = d[i + 1] = d[i + 2] = v;
-            d[i + 3] = 255;
-        }
+    for (let i = 0, p = 0; i < mono.bits.length; i++, p += 4) {
+        const v = mono.bits[i] ? 0 : 255;
+        d[p] = d[p + 1] = d[p + 2] = v;
+        d[p + 3] = 255;
     }
     pctx.putImageData(img, 0, 0);
 }
@@ -894,23 +878,66 @@ function readForm() {
     return patch;
 }
 
+function scratchDoc() {
+    return toDocument({ page, objects: editor.boxes, media: state.media, orient: state.orient, model: state.model, vars: state.vars });
+}
+
 function saveScratch() {
+    if (!page) {
+        return;
+    }
     try {
-        localStorage.setItem(STORE, JSON.stringify(toDocument(page, editor.boxes)));
+        localStorage.setItem(STORE, JSON.stringify(scratchDoc()));
     } catch {
         /* quota */
     }
 }
 
-function restore() {
+/** The last session's label, or a pm220_rp2_webapp one left in this browser. */
+function restoreScratch() {
+    let raw = null;
     try {
-        const raw = localStorage.getItem(STORE);
-        if (raw) {
-            editor.load(fromDocument(JSON.parse(raw)));
+        raw = localStorage.getItem(STORE);
+        if (!raw) {
+            raw = localStorage.getItem(LEGACY_STORE);
+            if (raw) {
+                localStorage.setItem(STORE + "-advanced", localStorage.getItem(LEGACY_STORE + "-advanced") || "0");
+            }
         }
     } catch {
-        /* ignore */
+        return null;
     }
+    if (!raw) {
+        return null;
+    }
+    try {
+        return fromDocument(JSON.parse(raw));
+    } catch {
+        return null;
+    }
+}
+
+/** Load a parsed document: its model and label size first (so the boxes are
+ *  clamped to the right page, which pm220 got wrong on boot), then the boxes. */
+function loadDocument(d) {
+    const model = (d.model && findModel(d.model)) || state.model || defaultModel();
+    state.model = model;
+    let media = d.media && (findMedia(d.media.id) || null);
+    if (!media && d.media && d.media.w_mm) {
+        media = { ...d.media, id: d.media.id || `doc-${d.media.w_mm}x${d.media.h_mm}`, name: d.media.name || `${d.media.w_mm} × ${d.media.h_mm} mm` };
+    }
+    if (media) {
+        state.media = media;
+        state.orient = d.orient || 0;
+    } else {
+        setModel(model);
+    }
+    state.vars = d.vars || [];
+    computePage();
+    editor.page = page;
+    editor.safe = page.safe_rect;
+    applyPage();
+    editor.load(d.objects);
 }
 
 function syncAdvanced() {
@@ -957,7 +984,7 @@ $("image-file").addEventListener("change", async (e) => {
         return;
     }
     try {
-        const { png } = await importImageFile(file, () => paint());
+        const { png } = await importImageFile(file, () => paint(), Math.max(page.width_dots, page.height_dots));
         const sel = editor.selected();
         if (sel && sel.type === "image") {
             editor.updateSelected({ png });
@@ -982,19 +1009,148 @@ $("obj-next").addEventListener("click", () => editor.cyclePreview(1));
 $("obj-prev").addEventListener("click", () => editor.cyclePreview(-1));
 $("obj-select").addEventListener("click", () => editor.confirmPreview());
 
-let picoName = "";
+// ---- dialogs ----
+let picoStore = "flash";
 const picker = bindPicker({
-    getDoc: () => toDocument(page, editor.boxes),
-    loadDoc: (objects) => {
-        editor.load(objects);
+    getDoc: () => scratchDoc(),
+    loadDoc: (d) => {
+        loadDocument(d);
         histReset();
     },
-    picoName: () => picoName,
-    setPicoName: (name) => { picoName = name; },
+    picoName: () => state.picoName,
+    setPicoName: (name, store) => {
+        state.picoName = name;
+        if (store) {
+            picoStore = store;
+        }
+        document.title = name ? `${name} · BTGW Printer` : "BTGW Printer";
+    },
     setStatus,
 });
-const wifiUi = bindWifiSettings({ setStatus });
-const calUi = bindCalibrate({ setStatus, applyMedia });
+const netUi = bindNetwork({ setStatus });
+
+function current() {
+    const printer = currentPrinter();
+    return {
+        printer,
+        addr: printer ? printer.addr : null,
+        model: state.model,
+        media: state.media,
+        orient: state.orient,
+        page,
+        objects: editor.boxes,
+        vars: state.vars,
+        docName: state.picoName,
+    };
+}
+
+const printersUi = bindPrinters({
+    setStatus,
+    onChange: (o) => {
+        if (o && o.printerChanged) {
+            const p = currentPrinter();
+            const m = p && findModel({ driver: p.driver, id: p.model });
+            if (m && (!state.model || m.key !== state.model.key)) {
+                setModel(m, { keepMedia: true });
+                applyPage({ rescale: true });
+            } else {
+                applyPage();
+            }
+        }
+        refreshPrinterUi();
+    },
+});
+const mediaUi = bindMedia({
+    current,
+    setStatus,
+    choose: (m) => {
+        state.media = m;
+        state.orient = m.orient || 0;
+        applyPage({ rescale: true });
+        histRecord();
+    },
+    setOrient: (deg) => {
+        state.orient = deg;
+        applyPage({ rescale: true });
+    },
+});
+const calUi = bindCalibrate({
+    setStatus,
+    current,
+    loadCal,
+    saveCal: async (addr, media, cal) => {
+        if (addr && findPrinter(addr)) {
+            await saveCalibration(addr, media, cal);
+        } else {
+            state.sessionCal.set(calKey(state.model, media), cal);
+        }
+    },
+    applied: () => applyPage(),
+    testPrint: async (cal) => {
+        const pg = pageFor(state.model, state.media, cal, 0);
+        await printer.printHeadMono(testFrameMono(pg.geo, pg.cal), pg);
+    },
+});
+const templ = bindTemplates({
+    objects: () => editor.boxes,
+    vars: () => state.vars,
+    setVars: (defs) => {
+        state.vars = defs;
+        saveScratch();
+    },
+    docName: () => state.picoName,
+    setStatus,
+    printLabels: (list) => printer.printLabels(list),
+    renderPreview: (canvas, values, index) => renderPreview(canvas, values, index),
+});
+const printer = bindPrint({
+    current,
+    render,
+    setStatus,
+    isConnected: (addr) => {
+        const st = printersUi.stateOf(addr).state;
+        return st === "connected" || st === "printing" || st === "idle";
+    },
+    openPrinters: () => printersUi.open(),
+});
+
+
+function renderPreview(canvas, values, index) {
+    const defs = effectiveDefs(editor.boxes, state.vars);
+    const r = resolveValues(defs, values, index, { counters: counterStore(state.picoName).get() });
+    const m = render(fillObjects(editor.boxes, r));
+    canvas.width = m.w;
+    canvas.height = m.h;
+    const c = canvas.getContext("2d");
+    const img = c.createImageData(m.w, m.h);
+    for (let i = 0, p = 0; i < m.bits.length; i++, p += 4) {
+        const v = m.bits[i] ? 0 : 255;
+        img.data[p] = img.data[p + 1] = img.data[p + 2] = v;
+        img.data[p + 3] = 255;
+    }
+    c.putImageData(img, 0, 0);
+}
+
+async function sendPrint() {
+    if (printer.busy()) {
+        return;
+    }
+    if (hasVars(editor.boxes)) {
+        const r = await templ.promptValues();
+        if (!r) {
+            return;
+        }
+        await printer.printLabels([{ values: r.values, copies: r.count }]);
+        return;
+    }
+    const p = currentPrinter();
+    await printer.printLabels([{ values: {}, copies: (p && p.copies) || 1 }]);
+}
+
+$("print").addEventListener("click", () => sendPrint());
+$("mode-switch").addEventListener("click", () => {
+    location.href = "/";
+});
 
 $("file").addEventListener("change", async (e) => {
     const file = e.target.files && e.target.files[0];
@@ -1006,15 +1162,60 @@ $("file").addEventListener("change", async (e) => {
         return;
     }
     try {
-        const text = await file.text();
-        editor.load(fromDocument(JSON.parse(text)));
+        const d = fromDocument(JSON.parse(await readFileText(file)));
+        loadDocument(d);
         histReset();
-        picoName = file.name.replace(/\.gz$/i, "");
-        setStatus(`opened ${picoName}`, "ok");
+        state.picoName = file.name.replace(/\.gz$/i, "").replace(/\.pm220\.json$/i, ".label.json");
+        setStatus(`opened ${file.name}${d.legacy ? " (pm220 label, 50 × 30 mm)" : ""}`, "ok");
     } catch (err) {
         setStatus(String(err.message || err), "err");
     }
 });
+
+// ---- keyboard (pm220 handler, map in keymap.js) ----
+function runAction(action) {
+    switch (action) {
+        case "open":
+            picker.open("open");
+            return true;
+        case "save":
+            if (!state.picoName) {
+                picker.open("save");
+            } else {
+                picker.saveCurrent();
+            }
+            return true;
+        case "saveAs":
+            picker.open("save");
+            return true;
+        case "print":
+            sendPrint();
+            return true;
+        case "batch":
+            templ.openBatch();
+            return true;
+        case "printers":
+            printersUi.open();
+            return true;
+        case "media":
+            mediaUi.open();
+            return true;
+        case "vars":
+            templ.openVars();
+            return true;
+        case "calibrate":
+            calUi.open();
+            return true;
+        case "network":
+            netUi.open();
+            return true;
+        case "addText":
+            editor.addBox(defaultText(page, editor.safe));
+            return true;
+        default:
+            return false;
+    }
+}
 
 document.addEventListener("keydown", (e) => {
     if (helpIsOpen()) {
@@ -1059,61 +1260,32 @@ document.addEventListener("keydown", (e) => {
         }
         return;
     }
-    const mod = e.ctrlKey || e.metaKey;
-    if (mod && !e.altKey && e.key.toLowerCase() === "o") {
-        if (overlayOpen()) {
-            return;
-        }
-        e.preventDefault();
-        picker.open("open");
-        return;
-    }
-    if (mod && !e.altKey && e.key.toLowerCase() === "s") {
-        if (overlayOpen()) {
-            return;
-        }
-        e.preventDefault();
-        if (e.shiftKey || !picoName) {
-            picker.open("save");
-        } else {
-            picker.saveCurrent();
-        }
-        return;
-    }
-    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "p") {
-        if (overlayOpen()) {
-            return;
-        }
-        e.preventDefault();
-        sendPrint();
-        return;
-    }
     if (overlayOpen()) {
         return;
     }
-    if (mod && !e.altKey && e.key.toLowerCase() === "z") {
+    const g = actionFor("global", e);
+    if (g === "undo" || g === "redo") {
         if (isPayloadTyping()) {
-            return;
+            return;   // the browser's own undo while typing
         }
         e.preventDefault();
-        if (e.shiftKey) {
-            histRedo();
-        } else {
+        if (g === "undo") {
             histUndo();
+        } else {
+            histRedo();
         }
         return;
     }
-    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "x") {
+    if (g === "help") {
         if (isPayloadTyping()) {
             return;
         }
-        e.preventDefault();
-        histRedo();
-        return;
-    }
-    if (!isPayloadTyping() && (e.key === "?" || e.key === "F1")) {
         e.preventDefault();
         openHelp();
+        return;
+    }
+    if (g && runAction(g)) {
+        e.preventDefault();
         return;
     }
     const box = editor.selected();
@@ -1124,9 +1296,9 @@ document.addEventListener("keydown", (e) => {
     }
     const typing = e.target && (
         e.target.tagName === "TEXTAREA" ||
-        (e.target.tagName === "INPUT" && !isNumField(e.target))
+        (e.target.tagName === "INPUT" && !isNumField(e.target) && e.target.type !== "checkbox")
     );
-    if (!typing && (e.key === "n" || e.key === "N")) {
+    if (!typing && !e.ctrlKey && !e.metaKey && (e.key === "n" || e.key === "N")) {
         e.preventDefault();
         if (box) {
             moveEditorFocus(e.key === "N" ? -1 : 1);
@@ -1135,28 +1307,28 @@ document.addEventListener("keydown", (e) => {
         }
         return;
     }
-    if (!box && (e.key === " " || e.key === "Enter")) {
-        const tag = e.target && e.target.tagName;
-        if (tag !== "BUTTON" && tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") {
+    const tag = e.target && e.target.tagName;
+    const onControl = tag === "BUTTON" || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    if (!box && !onControl && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const a = actionFor("browse", e);
+        if (a === "select") {
             e.preventDefault();
             editor.confirmPreview();
             return;
         }
+        if (a && runAction(a)) {
+            e.preventDefault();
+            return;
+        }
     }
     const inField = e.target && (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT");
-    if (e.key === "Delete" && box) {
-        e.preventDefault();
-        editor.removeSelected();
-        return;
-    }
     if (inField) {
         if (isNumField(e.target) && !e.target.disabled) {
-            const step = e.shiftKey ? 8 : 1;
             let d = 0;
             if (e.key === "ArrowUp" || e.key === "k") {
-                d = step;
+                d = e.shiftKey ? 8 : 1;
             } else if (e.key === "ArrowDown" || e.key === "j") {
-                d = -step;
+                d = e.shiftKey ? -8 : -1;
             } else if (e.key === "K") {
                 d = 8;
             } else if (e.key === "J") {
@@ -1172,6 +1344,8 @@ document.addEventListener("keydown", (e) => {
             e.target.blur();
             editor.select(null);
         }
+        // Delete and Backspace edit the field; they never delete the object
+        // (pm220 deleted the whole object on Delete inside the text box).
         return;
     }
     if (isNudgeFocused() && box) {
@@ -1205,26 +1379,23 @@ document.addEventListener("keydown", (e) => {
             return;
         }
     }
-    if (e.key === "Backspace" && box) {
+    if (!box) {
+        return;
+    }
+    const a = actionFor("object", e);
+    if (a === "delete") {
         e.preventDefault();
         editor.removeSelected();
-    }
-    if (box && e.key === "d") {
+    } else if (a === "duplicate") {
         e.preventDefault();
         duplicateSelected();
-        return;
-    }
-    if (box && e.key === "m") {
+    } else if (a === "move") {
         e.preventDefault();
         enterMoveMode();
-        return;
-    }
-    if (box && e.key === "r") {
+    } else if (a === "rotate") {
         e.preventDefault();
         cycleRotation();
-        return;
-    }
-    if (e.key === "Escape" || e.key === "q") {
+    } else if (a === "deselect") {
         editor.select(null);
     }
 });
@@ -1304,69 +1475,8 @@ $("nudge-pad").addEventListener("focusout", () => setTimeout(markNudgeFocus, 0))
     $("resize-pad").addEventListener("lostpointercapture", stopHold);
 }
 
-function wrapNumSpins() {
-    for (const el of document.querySelectorAll(
-        "aside input[inputmode='numeric'], #cal input[inputmode='numeric'], #cal input[inputmode='decimal']",
-    )) {
-        if (el.parentElement && el.parentElement.classList.contains("num-spin")) {
-            continue;
-        }
-        const wrap = document.createElement("div");
-        wrap.className = "num-spin";
-        el.replaceWith(wrap);
-        wrap.appendChild(el);
-        const col = document.createElement("div");
-        col.className = "num-spin-btns";
-        const up = document.createElement("button");
-        up.type = "button";
-        up.tabIndex = -1;
-        up.className = "num-spin-up";
-        up.setAttribute("aria-label", "Increase");
-        up.textContent = "▲";
-        const down = document.createElement("button");
-        down.type = "button";
-        down.tabIndex = -1;
-        down.className = "num-spin-down";
-        down.setAttribute("aria-label", "Decrease");
-        down.textContent = "▼";
-        col.append(up, down);
-        wrap.appendChild(col);
-    }
-    let holdWait = 0;
-    let holdRep = 0;
-    const stopHold = () => {
-        clearTimeout(holdWait);
-        clearInterval(holdRep);
-        holdWait = 0;
-        holdRep = 0;
-    };
-    const onDown = (e) => {
-        const btn = e.target.closest(".num-spin-btns button");
-        if (!btn) {
-            return;
-        }
-        const input = btn.closest(".num-spin").querySelector("input");
-        if (!input || input.disabled) {
-            return;
-        }
-        e.preventDefault();
-        const delta = btn.classList.contains("num-spin-up") ? 1 : -1;
-        stepNumField(input, delta);
-        stopHold();
-        holdWait = setTimeout(() => {
-            holdRep = setInterval(() => stepNumField(input, delta), 50);
-        }, 300);
-        btn.setPointerCapture?.(e.pointerId);
-    };
-    for (const root of document.querySelectorAll("aside, #cal")) {
-        root.addEventListener("pointerdown", onDown);
-        root.addEventListener("pointerup", stopHold);
-        root.addEventListener("pointercancel", stopHold);
-        root.addEventListener("lostpointercapture", stopHold);
-    }
-}
-
-wrapNumSpins();
+wrapNumSpins("aside input[inputmode='numeric'], #cal input[inputmode='numeric'], #cal input[inputmode='decimal']");
+bindSpinHolds();
 
 function setStatus(msg, kind) {
     const el = $("status");
@@ -1374,92 +1484,100 @@ function setStatus(msg, kind) {
     el.className = kind || "";
 }
 
-let statusTimer = 0;
-let statusBusy = false;
-let printerUp = false;
+// ---- printer / board status ----
+function refreshPrinterUi() {
+    const p = currentPrinter();
+    $("printer-name").textContent = p ? (p.nickname || p.addr) : (state.model ? `${state.model.name} (design)` : "none");
+    const st = p ? printersUi.stateOf(p.addr).state : null;
+    const up = st === "connected" || st === "idle" || st === "printing";
+    $("printer-btn").classList.toggle("ok", !!up);
+    $("print").disabled = !up || printer.busy();
+    if (!ws.connected) {
+        setStatus(`board unreachable (${deviceLabel()})`, "err");
+    } else if (!printersUi.hubUp()) {
+        setStatus(`no printer_hub on ${deviceLabel()} · designing only`, "");
+    } else if (!p) {
+        setStatus("no printer selected", "");
+    } else {
+        setStatus(`${p.nickname || p.addr}: ${printersUi.stateText(p.addr)}`, up ? "ok" : "");
+    }
+}
 
+let statusTimer = 0;
 function scheduleStatus() {
     clearTimeout(statusTimer);
-    let ms = 10000;
-    if (document.hidden) {
-        ms = 20000;
-    } else if (typeof picker !== "undefined" && picker.isOpen()) {
-        ms = 30000;
-    } else if (typeof calUi !== "undefined" && calUi.isOpen()) {
-        ms = 30000;
-    } else if (typeof wifiUi !== "undefined" && wifiUi.isOpen()) {
-        ms = 15000;
-    } else if (!printerUp) {
-        ms = 5000;
-    }
-    statusTimer = setTimeout(() => refreshStatus(), ms);
-}
-
-async function refreshStatus() {
-    if (statusBusy) {
-        return null;
-    }
-    statusBusy = true;
-    try {
-        const st = await fetchStatus();
-        printerUp = !!st.printer_connected;
-        const bit = printerUp ? "printer connected" : "no printer";
-        setStatus(`${bit} · ${apiBase()}`, printerUp ? "ok" : "");
-        $("print").disabled = !printerUp;
-        return st;
-    } catch (err) {
-        printerUp = false;
-        setStatus(`API unreachable (${apiBase()})`, "err");
-        $("print").disabled = true;
-        return null;
-    } finally {
-        statusBusy = false;
+    statusTimer = setTimeout(async () => {
+        if (ws.connected && !document.hidden) {
+            await printersUi.refreshStatus();
+        }
+        refreshPrinterUi();
         scheduleStatus();
+    }, document.hidden ? 20000 : 10000);
+}
+document.addEventListener("visibilitychange", () => scheduleStatus());
+
+async function onBoard() {
+    await whenInfo();
+    await refreshSd().catch(() => false);
+    const mode = await readJsonOr("printer/mode.json", null).catch(() => null);
+    $("mode-switch").hidden = !(mode && mode.mode === "companion");
+    await Promise.all([loadUserMedia(), loadPrinters()]);
+    const had = !!state.model;
+    await printersUi.refreshDrivers();
+    // A live driver's caps may differ from the shipped ones: re-derive.
+    const p = currentPrinter();
+    const m = (p && findModel({ driver: p.driver, id: p.model })) || (state.model && findModel(state.model.key)) || defaultModel();
+    if (!had || m !== state.model) {
+        state.model = m;
+        if (!state.media) {
+            setModel(m);
+        }
     }
+    applyPage();
+    await printersUi.refreshStatus();
+    printersUi.autoConnect();
+    refreshPrinterUi();
 }
 
-document.addEventListener("visibilitychange", () => {
-    scheduleStatus();
+ws.on("_open", () => {
+    onBoard().catch((err) => setStatus(String(err.message || err), "err"));
+});
+ws.on("_close", () => refreshPrinterUi());
+onCatalog(() => {
+    if (state.media && !findMedia(state.media.id) && !String(state.media.id).startsWith("doc-")) {
+        // the size was deleted: keep the label as it is, but stop naming a size that is gone
+    }
 });
 
-async function sendPrint() {
-    $("print").disabled = true;
-    try {
-        paint();
-        const res = await postPrint(packed);
-        setStatus(`sent ${res.bytes} bytes · ${res.print_width_dots}×${res.print_height_dots} at ${res.origin_x},${res.origin_y}`, "ok");
-    } catch (err) {
-        setStatus(String(err.message || err), "err");
-    } finally {
-        $("print").disabled = false;
-        refreshStatus();
-    }
-}
-
-$("print").addEventListener("click", () => sendPrint());
-
 async function boot() {
+    $("help-cols").innerHTML = helpHtml();
     try {
         $("advanced").checked = localStorage.getItem(STORE + "-advanced") === "1";
     } catch {
         $("advanced").checked = false;
     }
     syncAdvanced();
-    layoutGuides();
-    restore();
+    await loadPresets();
+    const d = restoreScratch();
+    if (d) {
+        loadDocument(d);
+    } else {
+        setModel(defaultModel());
+        applyPage();
+    }
     histReset();
     updateStageKeys();
-    refreshStatus();
-    try {
-        applyMedia(await fetchMedia());
-    } catch {
-        /* fallback page */
-    }
+    refreshPrinterUi();
     layoutGuides();
     new ResizeObserver(() => layoutGuides()).observe($("stage-wrap"));
     window.addEventListener("resize", () => layoutGuides());
+    connectDevice();
+    scheduleStatus();
 }
 
 boot().catch((err) => {
     setStatus(String(err.message || err), "err");
 });
+
+// For tests and the console.
+window.btgwPrinter = { editor, state, current, page: () => page, applyPage, sdAvailable };

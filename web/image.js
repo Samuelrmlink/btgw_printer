@@ -2,16 +2,17 @@
 
 import { registerDrawer, withBox } from "./raster.js";
 
+// The longest side an imported image is kept at; the app passes the page size.
 const MAX_SIDE = 384;
 const cache = new Map();
 
-export function importImageFile(file, onReady) {
+export function importImageFile(file, onReady, maxSide = MAX_SIDE) {
     return new Promise((resolve, reject) => {
         const url = URL.createObjectURL(file);
         const im = new Image();
         im.onload = () => {
             URL.revokeObjectURL(url);
-            const scale = Math.min(1, MAX_SIDE / Math.max(im.naturalWidth, im.naturalHeight));
+            const scale = Math.min(1, maxSide / Math.max(im.naturalWidth, im.naturalHeight));
             const w = Math.max(1, Math.round(im.naturalWidth * scale));
             const h = Math.max(1, Math.round(im.naturalHeight * scale));
             const c = document.createElement("canvas");
@@ -118,3 +119,23 @@ export function drawImageObj(ctx, obj, onReady) {
 }
 
 registerDrawer("image", drawImageObj);
+
+/** Resolves once every image object's PNG has decoded, so a print never
+ *  rasterises a blank image box (the pm220 app could, on the first paint). */
+export function whenImagesReady(objects) {
+    const waits = [];
+    for (const o of objects || []) {
+        if (o.type !== "image" || !o.png) {
+            continue;
+        }
+        const im = cachedPng(o.png, null);
+        if (im.complete && im.naturalWidth) {
+            continue;
+        }
+        waits.push(new Promise((resolve) => {
+            im.addEventListener("load", resolve, { once: true });
+            im.addEventListener("error", resolve, { once: true });
+        }));
+    }
+    return Promise.all(waits);
+}

@@ -1,201 +1,178 @@
-/** Printer registration calibration (settings/print.json). */
+/** Calibration: the pm220 dialog, now per printer × label size.
+ *
+ * Fields and limits are the pm220 ones (settings/print.json there); the
+ * layout math is layout.js computeLayout. Saved in printer/printers.json under
+ * the printer's address and the label size's id. With no saved printer the
+ * values only last for this session. */
 
-import { fetchMedia, getFsJson, postPrintTest, putFs } from "./api.js";
+import { describeLayout, pageFor, normaliseCalibration, labelGeometry, defaultCalibration, CAL_ADJ_LIM, CAL_MM_LIM } from "./layout.js";
+import { isNumField, setDynamicBounds, stepNumField } from "./numfield.js";
+import { monoNew } from "./pack.js";
 
-const PATH = "settings/print.json";
-const ADJ_LIM = 80;
-const MM_LIM = 10;
-const MM_DEFAULT = { offset_x_mm: -1.25, offset_y_mm: 3, gap_mm: 2 };
-const SAFE_DEFAULT = { safe_x0: 32, safe_y0: 32, safe_x1: 351, safe_y1: 207 };
-const DPI = 203;
-const WIDTH_MM = 50;
-const HEIGHT_MM = 30;
-const SRC_W = 384;
-const SRC_H = 240;
 const $ = (id) => document.getElementById(id);
 
-function clampAdj(n) {
-    if (!Number.isFinite(n)) {
-        return 0;
-    }
-    n = Math.round(n);
-    if (n < -ADJ_LIM) {
-        return -ADJ_LIM;
-    }
-    if (n > ADJ_LIM) {
-        return ADJ_LIM;
-    }
-    return n;
-}
+const FIELDS = [
+    ["cal-offx", "offset_x_mm", "mm"],
+    ["cal-offy", "offset_y_mm", "mm"],
+    ["cal-gap", "gap_mm", "gap"],
+    ["cal-ox", "origin_x_adj", "adj"],
+    ["cal-oy", "origin_y_adj", "adj"],
+    ["cal-ph", "print_height_adj", "adj"],
+    ["cal-sx0", "safe_x0", "sx0"],
+    ["cal-sy0", "safe_y0", "sy0"],
+    ["cal-sx1", "safe_x1", "sx1"],
+    ["cal-sy1", "safe_y1", "sy1"],
+];
 
-function clampSafe(n, lo, hi) {
-    if (!Number.isFinite(n)) {
-        return lo;
-    }
-    n = Math.round(n);
-    if (n < lo) {
-        return lo;
-    }
-    if (n > hi) {
-        return hi;
-    }
-    return n;
-}
-
-function clampMm(n) {
-    if (!Number.isFinite(n)) {
-        return 0;
-    }
-    if (n < -MM_LIM) {
-        return -MM_LIM;
-    }
-    if (n > MM_LIM) {
-        return MM_LIM;
-    }
-    return Math.round(n * 100) / 100;
-}
-
-function mmToDots(mm) {
-    return Math.round(mm * DPI / 25.4);
-}
-
-function zeros() {
-    return {
-        origin_x_adj: 0,
-        origin_y_adj: 0,
-        print_height_adj: 0,
-        offset_x_mm: MM_DEFAULT.offset_x_mm,
-        offset_y_mm: MM_DEFAULT.offset_y_mm,
-        gap_mm: MM_DEFAULT.gap_mm,
-        ...SAFE_DEFAULT,
+/** The pm220 firmware's test frame (job.c draw_frame): a 3-dot frame inset
+ *  2 mm (5 mm at the bottom), a centre cross, and the safe rect dotted. In
+ *  head coordinates, srcW × srcH, so it prints the same whatever the label's
+ *  orientation in the editor. */
+export function testFrameMono(geo, cal) {
+    const w = geo.srcW;
+    const h = geo.srcH;
+    const m = monoNew(w, h);
+    const set = (x, y, v = 1) => {
+        if (x >= 0 && y >= 0 && x < w && y < h) {
+            m.bits[y * w + x] = v;
+        }
     };
+    const d = (mm) => Math.trunc(mm * geo.dpi / 25.4 + 0.5);
+    const thickness = 3;
+    const ix = Math.max(d(2), thickness + 1);
+    const iy0 = Math.max(d(2), thickness + 1);
+    const iy1 = Math.max(d(5), thickness + 1);
+    const x0 = ix;
+    const y0 = iy0;
+    const x1 = w - 1 - ix;
+    const y1 = h - 1 - iy1;
+    if (x1 > x0 && y1 > y0) {
+        for (let t = 0; t < thickness; t++) {
+            for (let x = x0; x <= x1; x++) {
+                set(x, y0 + t);
+                set(x, y1 - t);
+            }
+            for (let y = y0; y <= y1; y++) {
+                set(x0 + t, y);
+                set(x1 - t, y);
+            }
+        }
+        const cx = w >> 1;
+        const cy = h >> 1;
+        const arm = Math.trunc(Math.min(x1 - x0, y1 - y0) / 4);
+        for (let i = -arm; i <= arm; i++) {
+            set(cx + i, cy);
+            set(cx + i, cy + 1);
+            set(cx, cy + i);
+            set(cx + 1, cy + i);
+        }
+    }
+    for (let t = 0; t < 2; t++) {
+        const sx0 = cal.safe_x0 + t;
+        const sy0 = cal.safe_y0 + t;
+        const sx1 = cal.safe_x1 - t;
+        const sy1 = cal.safe_y1 - t;
+        if (sx1 <= sx0 || sy1 <= sy0) {
+            break;
+        }
+        for (let x = sx0; x <= sx1; x++) {
+            if ((x & 7) < 4) {
+                set(x, sy0);
+                set(x, sy1);
+            }
+        }
+        for (let y = sy0; y <= sy1; y++) {
+            if ((y & 7) < 4) {
+                set(sx0, y);
+                set(sx1, y);
+            }
+        }
+    }
+    return m;
 }
 
-function readAdj() {
-    return {
-        origin_x_adj: clampAdj(Number($("cal-ox").value)),
-        origin_y_adj: clampAdj(Number($("cal-oy").value)),
-        print_height_adj: clampAdj(Number($("cal-ph").value)),
-        offset_x_mm: clampMm(Number($("cal-offx").value)),
-        offset_y_mm: clampMm(Number($("cal-offy").value)),
-        gap_mm: clampMm(Math.max(0, Number($("cal-gap").value))),
-        safe_x0: clampSafe(Number($("cal-sx0").value), 0, SRC_W - 2),
-        safe_y0: clampSafe(Number($("cal-sy0").value), 0, SRC_H - 2),
-        safe_x1: clampSafe(Number($("cal-sx1").value), 1, SRC_W - 1),
-        safe_y1: clampSafe(Number($("cal-sy1").value), 1, SRC_H - 1),
-    };
-}
-
-function fillAdj(data) {
-    const d = { ...zeros(), ...(data || {}) };
-    $("cal-ox").value = String(clampAdj(Number(d.origin_x_adj) || 0));
-    $("cal-oy").value = String(clampAdj(Number(d.origin_y_adj) || 0));
-    $("cal-ph").value = String(clampAdj(Number(d.print_height_adj) || 0));
-    const ox = d.offset_x_mm;
-    const oy = d.offset_y_mm;
-    $("cal-offx").value = String(clampMm(ox == null ? MM_DEFAULT.offset_x_mm : Number(ox)));
-    $("cal-offy").value = String(clampMm(oy == null ? MM_DEFAULT.offset_y_mm : Number(oy)));
-    const gap = d.gap_mm;
-    $("cal-gap").value = String(clampMm(gap == null ? MM_DEFAULT.gap_mm : Math.max(0, Number(gap))));
-    $("cal-sx0").value = String(d.safe_x0 == null ? SAFE_DEFAULT.safe_x0 : clampSafe(Number(d.safe_x0), 0, SRC_W - 2));
-    $("cal-sy0").value = String(d.safe_y0 == null ? SAFE_DEFAULT.safe_y0 : clampSafe(Number(d.safe_y0), 0, SRC_H - 2));
-    $("cal-sx1").value = String(d.safe_x1 == null ? SAFE_DEFAULT.safe_x1 : clampSafe(Number(d.safe_x1), 1, SRC_W - 1));
-    $("cal-sy1").value = String(d.safe_y1 == null ? SAFE_DEFAULT.safe_y1 : clampSafe(Number(d.safe_y1), 1, SRC_H - 1));
-}
-
-function computeLayout(adj) {
-    const pageW = mmToDots(WIDTH_MM);
-    const pageH = mmToDots(HEIGHT_MM);
-    let originX = Math.floor((pageW - SRC_W) / 2);
-    let originY = Math.floor((pageH - SRC_H) / 2);
-    if (originX < 0) {
-        originX = 0;
-    }
-    if (originY < 0) {
-        originY = 0;
-    }
-    const dx = mmToDots(adj.offset_x_mm);
-    const dy = mmToDots(adj.offset_y_mm);
-    let shiftX = 0;
-    let shiftY = 0;
-    if (originX + dx < 0) {
-        shiftX = originX + dx;
-        originX = 0;
-    } else {
-        originX += dx;
-    }
-    if (originY + dy < 0) {
-        shiftY = originY + dy;
-        originY = 0;
-    } else {
-        originY += dy;
-    }
-    originX += adj.origin_x_adj;
-    originY += adj.origin_y_adj;
-    if (originX < 0) {
-        shiftX += originX;
-        originX = 0;
-    }
-    if (originY < 0) {
-        shiftY += originY;
-        originY = 0;
-    }
-    if (originX > pageW - 1) {
-        originX = pageW - 1;
-    }
-    if (originY > pageH - 1) {
-        originY = pageH - 1;
-    }
-    const availW = Math.max(1, pageW - originX);
-    const availH = Math.max(1, pageH - originY);
-    let printW = SRC_W < availW ? SRC_W : availW;
-    let printH = SRC_H < availH ? SRC_H : availH;
-    printH += adj.print_height_adj;
-    if (printH < 1) {
-        printH = 1;
-    }
-    if (printH > availH) {
-        printH = availH;
-    }
-    return { originX, originY, printW, printH, shiftX, shiftY, pageW, pageH };
-}
-
-export function bindCalibrate({ setStatus, applyMedia }) {
+/** ctx: {setStatus, current() → {model, media, addr, printer}, saveCal(addr, media, cal),
+ *        loadCal(addr, model, media), applied(cal), testPrint(cal) } */
+export function bindCalibrate(ctx) {
     const overlay = $("cal");
     const errEl = $("cal-err");
+    let geo = null;
+    let model = null;
+    let media = null;
+
+    setDynamicBounds((el) => {
+        if (!geo || !el.id.startsWith("cal-")) {
+            return null;
+        }
+        const f = FIELDS.find((x) => x[0] === el.id);
+        if (!f) {
+            return null;
+        }
+        switch (f[2]) {
+            case "mm":
+                return { lo: -CAL_MM_LIM, hi: CAL_MM_LIM, step: 0.25 };
+            case "gap":
+                return { lo: 0, hi: CAL_MM_LIM, step: 0.25 };
+            case "adj":
+                return { lo: -CAL_ADJ_LIM, hi: CAL_ADJ_LIM, step: 1 };
+            case "sx0":
+                return { lo: 0, hi: geo.srcW - 4, step: 1 };
+            case "sy0":
+                return { lo: 0, hi: geo.srcH - 4, step: 1 };
+            case "sx1":
+                return { lo: 3, hi: geo.srcW - 1, step: 1 };
+            case "sy1":
+                return { lo: 3, hi: geo.srcH - 1, step: 1 };
+            default:
+                return null;
+        }
+    });
 
     function showErr(msg) {
-        if (!msg) {
-            errEl.hidden = true;
-            errEl.textContent = "";
-            return;
+        errEl.hidden = !msg;
+        errEl.textContent = msg || "";
+    }
+
+    function readCal() {
+        const out = {};
+        for (const [id, key] of FIELDS) {
+            const v = Number(String($(id).value).trim());
+            out[key] = Number.isFinite(v) ? v : 0;
         }
-        errEl.hidden = false;
-        errEl.textContent = msg;
+        return normaliseCalibration(out, geo);
+    }
+
+    function fill(cal) {
+        for (const [id, key] of FIELDS) {
+            $(id).value = String(cal[key]);
+        }
     }
 
     function updateEffective() {
-        const L = computeLayout(readAdj());
-        $("cal-effective").textContent =
-            `BITMAP ${L.originX},${L.originY}  ${L.printW}×${L.printH}  ` +
-            `(canvas ${SRC_W}×${SRC_H}, offset ${readAdj().offset_x_mm}/${readAdj().offset_y_mm} mm, gap ${readAdj().gap_mm} mm, ` +
-            `safe ${readAdj().safe_x0},${readAdj().safe_y0}–${readAdj().safe_x1},${readAdj().safe_y1})`;
-    }
-
-    async function loadFile() {
-        try {
-            return await getFsJson(PATH);
-        } catch {
-            return zeros();
+        if (!model || !media) {
+            return;
         }
+        const page = pageFor(model, media, readCal(), 0);
+        $("cal-effective").textContent = describeLayout(page);
     }
 
-    async function open() {
+    function open() {
+        const cur = ctx.current();
         showErr("");
-        fillAdj(zeros());
-        overlay.hidden = false;
-        fillAdj(await loadFile());
+        model = cur.model;
+        media = cur.media;
+        if (!model || !media) {
+            ctx.setStatus("pick a printer model and label size first", "err");
+            return;
+        }
+        geo = labelGeometry(model, media);
+        $("cal-title").textContent = `Calibration · ${cur.printer ? (cur.printer.nickname || cur.printer.addr) : model.name} · ${media.name}`;
+        $("cal-for").textContent = cur.printer
+            ? `Saved for ${cur.printer.nickname || cur.printer.addr} with ${media.name} labels (printer/printers.json).`
+            : "No saved printer is selected: these values apply until the page is reloaded. Save a printer to keep them.";
+        fill(ctx.loadCal(cur.addr, model, media));
         updateEffective();
+        overlay.hidden = false;
         $("cal-offx").focus();
         $("cal-offx").select();
     }
@@ -206,21 +183,17 @@ export function bindCalibrate({ setStatus, applyMedia }) {
 
     async function save() {
         showErr("");
-        const body = JSON.stringify(readAdj());
+        const cal = readCal();
+        fill(cal);
         try {
-            await putFs(PATH, body);
-            try {
-                const media = await fetchMedia();
-                if (applyMedia && media) {
-                    applyMedia(media);
-                }
-            } catch {
-                /* keep last media */
-            }
+            await ctx.saveCal(ctx.current().addr, media, cal);
+            ctx.applied(cal);
             updateEffective();
-            setStatus("calibration saved", "ok");
+            ctx.setStatus("calibration saved", "ok");
+            return true;
         } catch (err) {
             showErr(String(err.message || err));
+            return false;
         }
     }
 
@@ -229,15 +202,16 @@ export function bindCalibrate({ setStatus, applyMedia }) {
     $("cal-close").addEventListener("click", () => close());
     $("cal-save").addEventListener("click", () => save());
     $("cal-reset").addEventListener("click", () => {
-        fillAdj(zeros());
+        fill(defaultCalibration(model, media));
         updateEffective();
     });
     $("cal-test").addEventListener("click", async () => {
         showErr("");
+        if (!(await save())) {
+            return;
+        }
         try {
-            await save();
-            const res = await postPrintTest();
-            setStatus(res.job ? `test print ${res.job}` : "test print sent", "ok");
+            await ctx.testPrint(readCal());
         } catch (err) {
             showErr(String(err.message || err));
         }
@@ -247,10 +221,7 @@ export function bindCalibrate({ setStatus, applyMedia }) {
             close();
         }
     });
-    const fieldIds = [
-        "cal-offx", "cal-offy", "cal-gap", "cal-ox", "cal-oy", "cal-ph",
-        "cal-sx0", "cal-sy0", "cal-sx1", "cal-sy1",
-    ];
+    const fieldIds = FIELDS.map((f) => f[0]);
     const actionIds = ["cal-test", "cal-reset", "cal-save", "cal-close"];
 
     function calFocusables() {
@@ -289,6 +260,23 @@ export function bindCalibrate({ setStatus, applyMedia }) {
             }
             return;
         }
+        if (isNumField(e.target)) {
+            let d = 0;
+            if (e.key === "ArrowUp" || e.key === "k") {
+                d = e.shiftKey ? 8 : 1;
+            } else if (e.key === "ArrowDown" || e.key === "j") {
+                d = e.shiftKey ? -8 : -1;
+            } else if (e.key === "K") {
+                d = 8;
+            } else if (e.key === "J") {
+                d = -8;
+            }
+            if (d) {
+                e.preventDefault();
+                stepNumField(e.target, d);
+                return;
+            }
+        }
         const onActions = actionIds.includes(e.target && e.target.id);
         const right = e.key === "ArrowRight" || e.key === "l" || e.key === "ArrowDown" || e.key === "j";
         const left = e.key === "ArrowLeft" || e.key === "h" || e.key === "ArrowUp" || e.key === "k";
@@ -307,5 +295,5 @@ export function bindCalibrate({ setStatus, applyMedia }) {
         }
     });
 
-    return { isOpen: () => !overlay.hidden };
+    return { isOpen: () => !overlay.hidden, open, close };
 }
