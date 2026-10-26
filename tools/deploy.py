@@ -10,9 +10,11 @@ then writes printer/mode.json, which tells the app whether to show the
 "BTGW" switch button.
 
 --target sd puts the app on the micro SD card instead (PUT /api/sd/files/),
-under --sd-dir (default apps/printer), with mode.json beside it. The board
-serves it at --sd-url (default /sd/<sd-dir>/), which needs the parent's SD
-static route (docs/parent-requirements.md R2). The parent UI's switch button
+under --sd-dir (default apps/printer), with mode.json beside it. The files
+stay gzipped, as on flash, so the board's GET /sd/<path> route has to serve
+<path>.gz with Content-Encoding: gzip and <dir>/index.html for a folder
+(docs/parent-requirements.md R2); the app opens at --sd-url (default
+/sd/<sd-dir>/). Files of ours left over in that folder are deleted. The parent UI's switch button
 (js/ext/printer-switch/) still has to live on flash, because the parent loads
 extensions from there; it is rewritten to open --sd-url. Labels, printer
 configs and job files are not moved by this; the app picks their store.
@@ -98,6 +100,19 @@ def point_switch(data, url):
     return gzip.compress(src.replace(old, "const TARGET = %s;" % json.dumps(url)).encode(), 9, mtime=0)
 
 
+def remote_sd(base, d):
+    """Every file under d on the card (d is the app's own folder)."""
+    try:
+        r = req("GET", "%s/api/sd/files/%s" % (base, enc(d)))
+    except urllib.error.HTTPError:
+        return []
+    out = []
+    for f in r.get("files", []) if isinstance(r, dict) else []:
+        p = d + "/" + f["name"]
+        out += remote_sd(base, p) if f.get("dir") else [p]
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("mode", choices=("companion", "standalone"))
@@ -127,10 +142,19 @@ def main():
             return f.read()
     mode = json.dumps({"mode": a.mode}).encode()
     if a.target == "sd":
+        sent = set()
         for rel in sorted(local):
             if rel.startswith("printer/"):
-                put(base, "sd", sd_dir + "/" + rel[len("printer/"):], data(rel), a.dry_run)
+                name, body = rel[len("printer/"):], data(rel)
+                put(base, "sd", sd_dir + "/" + name, body, a.dry_run)
+                sent.add(sd_dir + "/" + name)
         put(base, "sd", sd_dir + "/mode.json", mode, a.dry_run)
+        sent.add(sd_dir + "/mode.json")
+        for p in remote_sd(base, sd_dir):
+            if p not in sent:
+                print("DELETE sd:/" + p)
+                if not a.dry_run:
+                    req("DELETE", "%s/api/sd/files/%s" % (base, enc(p)))
         # Off-card files: the switch button (flash only) and, in standalone,
         # the root redirect. Flash may be full or failing, so warn, don't stop.
         for rel in sorted(local):

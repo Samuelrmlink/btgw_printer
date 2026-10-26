@@ -182,15 +182,26 @@ Check that one SPP channel works alongside at least one BLE central link (`BT_MA
 
 ### R2 (Must for companion mode): serve a static web app from the SD card
 
-`/api/sd/files/` serves `.js`/`.css` as `application/octet-stream`, sends no `Content-Encoding` for `.gz`, and has no directory index, so browsers refuse an ES-module app stored there.
+Partly done: parent `a4a104c` ("Serve SD card files at /sd", on
+`feature/pinecil-pex`) adds `GET /sd/<path>` as a read-only alias of
+`/api/sd/files` and adds MIME types for `.js`/`.mjs`/`.css`/`.wasm`/`.ico`.
+That route deliberately has no `.gz` preference, and a folder answers with
+the JSON listing. Our app is stored gzipped, the same way as on flash
+(`tools/deploy.py companion --target sd` puts it in `apps/printer/` on the card,
+`index.html.gz` included), so it still doesn't load. Measured on the bench board
+(10.255.255.23, 2026-10-26):
 
-Needed:
-- a static route for the card (for example `GET /sd/<path>`);
-- the same rules as LittleFS static files: `<path>.gz` first with `Content-Encoding: gzip`, then plain;
-- `<dir>/` serves `<dir>/index.html`;
-- MIME types for html, js, mjs, css, json, svg, png, wasm, woff2.
+| Request | Today | Needed |
+|---|---|---|
+| `GET /sd/apps/printer/` | 200, JSON listing | `index.html.gz` as `text/html`, `Content-Encoding: gzip` |
+| `GET /sd/apps/printer/app.js` | 404 (only `app.js.gz` exists) | `app.js.gz` as `text/javascript`, `Content-Encoding: gzip` |
+| `GET /sd/apps/printer/index.html.gz` | 200 `application/octet-stream`, no encoding | unchanged is fine |
+| `GET /sd/apps/printer` (no slash) | 200, JSON listing | a redirect to `/sd/apps/printer/`, or `index.html` (our page adds the slash itself) |
 
-Until then, our app lives on LittleFS under `/printer/`.
+The same rules as the LittleFS static files:
+- for `<path>`, try `<path>.gz` first, sent with `Content-Encoding: gzip` and the MIME type of `<path>`, then plain `<path>`;
+- `<dir>/` serves `<dir>/index.html` (so `index.html.gz` first);
+- the listing JSON stays on `/api/sd/files/<dir>`. If the alias has to keep the listing too, a folder holding `index.html(.gz)` should serve the page instead.
 
 **Done when:** `http://<board>/sd/apps/printer/` loads our app with all modules from the card.
 
