@@ -102,7 +102,7 @@ export function findModel(ref) {
 
 export function defaultModel() {
     return findModel("nelko_pl70e/pl70e") || models()[0] || {
-        key: "virtual/virtual", driver: "virtual", id: "virtual", name: "Virtual", dpi: 203, head_dots: 384,
+        key: "printer_virtual/virtual", driver: "printer_virtual", id: "virtual", name: "Virtual", dpi: 203, head_dots: 384,
         black_bit: 0, placement: true, media: ["gap"], presets: [],
     };
 }

@@ -108,20 +108,32 @@ the hub connects every printer in `printer/printers.json` with that driver
 and `auto_reconnect` not false, passing its whole entry as the config.
 
 Driver model caps (`printer.drivers`) carry `presets`, a list of media
-profile ids from `web/presets/media/`, written `<w>x<h>mm` (`50x30mm`) or
-`<w>x<h>in` (`4x6in`).
+profile ids from `web/presets/media/` (`nelko-pm220-50x30`, `nelko-4x6`,
+`nelko-p21-14x40`, `phomemo-d30-12x40`, ...), and `placement`: true when the
+printer places the bitmap itself (TSPL `BITMAP x,y`; the web app sends the
+cropped bitmap and its origin), false when the bitmap must be `head_dots`
+wide with the origin baked in. `web/presets/models.json` is the web app's
+copy of every driver's caps for designing without a board;
+`drivers/test/test_caps.c` fails when a field differs.
+
+Classic drivers open their session at security level 0 unless the printer's
+config sets `"security_level"` (0..4). The parent firmware at b397a84 checks
+the level before BTstack has read the encryption key size, so a session that
+asks for level 2 or more fails right after pairing
+(`docs/parent-requirements.md` B1). A printer that wants a legacy PIN still
+asks for it at level 0, and the driver answers from its PIN list.
 
 ## Settings JSON
 
 `printer/printers.json`:
 ```json
 {"version":1,"printers":[{"addr":"..","driver":"nelko_pl70e","model":"pl70e","nickname":"Shipping",
-  "media_id":"4x6","density":8,"speed":-1,"copies":1,"auto_reconnect":true,
-  "calibration":{"4x6":{"offset_x_mm":0,"offset_y_mm":0,"gap_mm":3,"origin_x_adj":0,"origin_y_adj":0,
+  "media_id":"nelko-4x6","density":8,"speed":-1,"copies":1,"auto_reconnect":true,
+  "calibration":{"nelko-4x6":{"offset_x_mm":0,"offset_y_mm":0,"gap_mm":3,"origin_x_adj":0,"origin_y_adj":0,
                         "print_height_adj":0,"safe":[16,16,815,1201]}}}]}
 ```
 `printer/media.json` and `web/presets/media/*.json`:
 ```json
-{"version":1,"media":[{"id":"4x6","name":"4×6 in shipping","w_mm":101.6,"h_mm":152.4,"gap_mm":3,
+{"version":1,"media":[{"id":"nelko-4x6","name":"4 × 6 in shipping","w_mm":101.6,"h_mm":152.4,"gap_mm":3,
   "type":"gap","safe_mm":[2,2,2,2],"models":["pl70e"]}]}
 ```

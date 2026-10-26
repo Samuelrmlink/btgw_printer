@@ -55,9 +55,9 @@ static prn_job_t job(uint32_t id, uint32_t rows, int copies) {
     j.width_dots = 96;
     j.row_bytes = 12;
     j.rows_total = rows;
-    j.width_mm10 = 120;
-    j.height_mm10 = 400;
-    j.gap_mm10 = 40;
+    j.width_mm100 = 1200;
+    j.height_mm100 = 4000;
+    j.gap_mm100 = 400;
     j.density = -1;
     j.speed = -1;
     j.copies = (uint8_t)copies;

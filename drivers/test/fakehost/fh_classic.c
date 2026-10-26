@@ -158,7 +158,11 @@ static void finish_sdp(int handle, int status, uint8_t ch) {
 static int kick(int handle) {
     cl_info_t in;
     if (cl_info(handle, &in) != CL_OK) { return CL_ENOENT; }
-    if (in.level <= 1) { cl_security(handle, in.level, 0, 0, 1); }
+    /* Level 0/1 asks for no authentication from the host, but a printer that
+     * wants a legacy PIN asks for one itself when RFCOMM opens (as the
+     * PM220 does and mcusim's legacy_only peer does): that path still pairs. */
+    fh_cl_peer_t *pp = peer_of(in.addr);
+    if (in.level <= 1 && !(pp && pp->has_pin)) { cl_security(handle, in.level, 0, 0, 1); }
     if (!in.channel) {
         if (!in.uuid) { cl_fail(handle, CL_WHY_SDP, "no uuid"); return CL_EINVAL; }
         cl_set_phase(handle, CL_PHASE_SDP);

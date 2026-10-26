@@ -38,7 +38,9 @@ int tspl_head(char *out, size_t cap, const tspl_job_t *j) {
     if (!h) {
         /* continuous media: the label is as long as the bitmap */
         uint32_t dpi = j->dpi ? j->dpi : 203u;
-        h = (uint32_t)(((uint64_t)j->rows * 2540u + dpi / 2u) / dpi);
+        /* rows < 65536 and 2540 * 65535 < 2^32: 32-bit math, so the module
+         * doesn't pull in libgcc's 64-bit division (~900 bytes) */
+        h = ((uint32_t)j->rows * 2540u + dpi / 2u) / dpi;
     }
     puts_(&b, "SIZE ");
     putmm(&b, j->width_mm100);

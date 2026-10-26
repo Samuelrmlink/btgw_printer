@@ -35,8 +35,8 @@ enum {
     /* a0 = const char *driver module name */
     PRN_HUB_UNREGISTER = 2,
     /* a0 = const char *kind ("state" | "found" | "status" | "log"),
-     * a1 = const char *json object. The hub adds "driver" and re-emits it as
-     * printer.<kind>. */
+     * a1 = const char *json object, which must include "driver". The hub
+     * re-emits it as printer.<kind>. */
     PRN_HUB_EMIT = 3,
     /* a0 = job id, a1 = PRN_JOB_* outcome, a2 = const char *message or 0.
      * The driver calls this when the printer has taken (or refused) the
@@ -125,8 +125,13 @@ typedef struct {
  *  "models":[{"id":"pm220","vendor":"Nelko","name":"PM220","transport":"classic",
  *    "dpi":203,"head_dots":384,"min_len_mm":10,"max_len_mm":200,
  *    "media":["gap","continuous"],"density":{"min":0,"max":15,"default":8},
- *    "speed":null,"black_bit":0,"copies":true,
- *    "status":["battery","paper","lid","media"],"presets":["50x30mm","40x30mm"]}]}
+ *    "speed":null,"black_bit":0,"copies":true,"placement":true,
+ *    "status":["battery","paper","lid","media"],"presets":["nelko-pm220-50x30","nelko-pm220-40x30"]}]}
+ * "placement" true: the printer places the bitmap itself (TSPL BITMAP x,y), so
+ * the web app sends the cropped bitmap and its origin. false: the bitmap is
+ * head_dots wide with the origin baked in, and origin is [0,0].
+ * web/presets/models.json is the web app's copy of every driver's caps;
+ * drivers/test/test_caps.c fails when the two disagree.
  * "speed" is null when the printer takes no speed command. The hub caches
  * id, black_bit and the density/speed ranges of up to four models per driver
  * and clamps job settings to them. Preset ids are media profile ids from the

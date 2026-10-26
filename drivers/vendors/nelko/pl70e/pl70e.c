@@ -337,8 +337,8 @@ static const char INFO[] =
     "\"name\":\"PL70e-BT\",\"transport\":\"ble\",\"dpi\":203,\"head_dots\":832,"
     "\"min_len_mm\":10,\"max_len_mm\":300,\"media\":[\"gap\",\"continuous\"],"
     "\"density\":{\"min\":0,\"max\":15,\"default\":8},\"speed\":null,\"black_bit\":0,"
-    "\"copies\":true,\"status\":[\"paper\",\"lid\",\"overheat\"],"
-    "\"presets\":[\"4x6in\",\"3x1in\",\"4x4in\",\"4x3in\",\"2x1in\"]}]}";
+    "\"copies\":true,\"placement\":true,\"status\":[\"paper\",\"lid\",\"overheat\"],"
+    "\"presets\":[\"nelko-4x6\",\"nelko-3x1\",\"nelko-4x4\",\"nelko-4x3\",\"nelko-2x1\"]}]}";
 
 static int drv_info(char *out, size_t cap) {
     if (cap < sizeof INFO) { return PEX_ENOMEM; }

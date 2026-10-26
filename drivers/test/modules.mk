@@ -33,3 +33,7 @@ CFLAGS += -DGOLDEN_DIR='"$(ROOT)/drivers/vendors/nelko/p21/test"'
 CFLAGS += -MMD -MP
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 -include pl70e.mk
+
+# test_caps: every driver's caps against web/presets/models.json
+$(BUILD)/test_caps: $(pl70e_OBJ)
+$(BUILD)/test_caps.o: CFLAGS += -DWEB_MODELS='"$(ROOT)/web/presets/models.json"'

@@ -261,8 +261,8 @@ static void t_info(void) {
     CHECK_HAS(out, "\"driver\":\"nelko_pl70e\"");
     CHECK_HAS(out, "\"head_dots\":832");
     CHECK_HAS(out, "\"black_bit\":0");
-    CHECK_HAS(out, "\"4x6in\"");
-    CHECK_HAS(out, "\"3x1in\"");
+    CHECK_HAS(out, "\"nelko-4x6\"");
+    CHECK_HAS(out, "\"nelko-3x1\"");
     CHECK(s_registered == 1);
 }
 

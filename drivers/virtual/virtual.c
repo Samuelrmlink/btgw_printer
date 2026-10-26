@@ -45,7 +45,7 @@ static int info(char *out, size_t cap) {
         "{\"id\":\"virtual\",\"vendor\":\"btgw_printer\",\"name\":\"Virtual printer\",\"transport\":\"none\","
         "\"dpi\":203,\"head_dots\":832,\"min_len_mm\":5,\"max_len_mm\":400,\"media\":[\"gap\",\"continuous\",\"blackmark\"],"
         "\"density\":{\"min\":0,\"max\":15,\"default\":8},\"speed\":{\"min\":1,\"max\":5,\"default\":3},"
-        "\"black_bit\":0,\"copies\":false,\"status\":[\"battery\"],\"presets\":[]}]}");
+        "\"black_bit\":0,\"copies\":false,\"placement\":true,\"status\":[\"battery\"],\"presets\":[]}]}");
 }
 
 static int status(char *out, size_t cap) {

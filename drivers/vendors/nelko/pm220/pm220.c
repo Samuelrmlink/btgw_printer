@@ -60,6 +60,11 @@ static int s_link, s_handle, s_want, s_auth_fails, s_backoff_n;
 static uint8_t s_addr[6];
 static char s_addr_s[18];
 static uint8_t s_channel;
+/* Classic security level for the session (0..4). 0 by default: the parent
+ * firmware (b397a84) checks the level before BTstack has read the encryption
+ * key size, so every session asking for level >= 2 fails after pairing
+ * (docs/parent-requirements.md B1). printers.json "security_level" overrides. */
+static uint8_t s_level;
 static uint32_t s_t_retry, s_mtu, s_room_max;
 static char s_pins[PINS][16];
 static int s_npins, s_pin_i;
@@ -207,7 +212,7 @@ static int open_link(void) {
     o.uuid = SPP_UUID;
     o.channel = s_channel;           /* 0: SDP */
     o.fallback = FALLBACK_CH;
-    o.level = PEX_CL_LEVEL_OMIT;
+    o.level = s_level;
     o.io = PEX_CL_IO_NONE;
     o.bond = PEX_CL_BOND_OMIT;
     o.drop_key = 1;
@@ -532,9 +537,9 @@ static int info(char *out, size_t cap) {
         "{\"driver\":\"%s\",\"abi\":1,\"available\":%s,\"models\":["
         "{\"id\":\"pm220\",\"vendor\":\"Nelko\",\"name\":\"PM220\",\"transport\":\"classic\","
         "\"dpi\":203,\"head_dots\":384,\"min_len_mm\":10,\"max_len_mm\":200,\"media\":[\"gap\",\"continuous\",\"blackmark\"],"
-        "\"density\":{\"min\":0,\"max\":15,\"default\":8},\"speed\":null,\"black_bit\":0,\"copies\":true,"
+        "\"density\":{\"min\":0,\"max\":15,\"default\":8},\"speed\":null,\"black_bit\":0,\"copies\":true,\"placement\":true,"
         "\"status\":[\"battery\",\"paper\",\"lid\",\"media\"],"
-        "\"presets\":[\"50x30mm\",\"40x30mm\",\"40x20mm\",\"30x20mm\",\"50x20mm\",\"50x80mm\"]}]}",
+        "\"presets\":[\"nelko-pm220-50x30\",\"nelko-pm220-40x30\",\"nelko-pm220-40x20\",\"nelko-pm220-30x20\",\"nelko-pm220-50x20\",\"nelko-pm220-50x80\"]}]}",
         s_self, classic_ok() ? "true" : "false");
 }
 
@@ -554,6 +559,8 @@ static int connect_(const char *addr, const char *cfg) {
     build_pins(cfg);
     int64_t ch = 0;
     s_channel = cfg && pex_json_int(cfg, "channel", &ch) && ch > 0 && ch < 31 ? (uint8_t)ch : 0;
+    int64_t lv = 0;
+    s_level = cfg && pex_json_int(cfg, "security_level", &lv) && lv >= 0 && lv <= 4 ? (uint8_t)lv : 0;
     s_have_bat = s_have_cfg = s_have_st = 0;
     s_ready = -1;
     s_want = 1;

@@ -26,6 +26,7 @@ static struct {
     uint8_t addr[6];
     char addr_str[18];
     uint8_t have_addr, link, pin_i, user_close, auto_reconnect;
+    uint8_t level;                  /* Classic security level, see do_connect */
     int h;
     uint16_t mtu;
     int tx_full;
@@ -73,6 +74,7 @@ static void emit_state(void) {
     pex_jw_t w;
     pex_jw_init(&w, S.emit, sizeof S.emit);
     pex_jw_obj(&w, NULL);
+    pex_jw_str(&w, "driver", DRV.driver);
     if (S.have_addr) { pex_jw_str(&w, "addr", S.addr_str); }
     pex_jw_str(&w, "model", DRV.model);
     pex_jw_str(&w, "state", link_name());
@@ -87,10 +89,13 @@ static void spp_log_rx(const uint8_t *d, size_t n) {
     S.last_rx_len = (uint8_t)n;
 }
 
-static int write_status(char *out, size_t cap) {
+/* The printer's status object; as_array wraps it in [...] for PRN_DRV_STATUS. */
+static int write_status(char *out, size_t cap, int as_array) {
     pex_jw_t w;
     pex_jw_init(&w, out, cap);
+    if (as_array) { pex_jw_arr(&w, NULL); }
     pex_jw_obj(&w, NULL);
+    pex_jw_str(&w, "driver", DRV.driver);
     if (S.have_addr) { pex_jw_str(&w, "addr", S.addr_str); }
     pex_jw_str(&w, "model", DRV.model);
     pex_jw_str(&w, "state", link_name());
@@ -99,11 +104,12 @@ static int write_status(char *out, size_t cap) {
     if (DRV.status_fields) { DRV.status_fields(&w); }
     if (S.last_rx_len) { pex_jw_hex(&w, "last_rx", S.last_rx, S.last_rx_len); }
     pex_jw_end(&w);
+    if (as_array) { pex_jw_end(&w); }
     return pex_jw_finish(&w);
 }
 
 static void spp_emit_status(void) {
-    if (write_status(S.emit, sizeof S.emit) >= 0) { hub_emit("status", S.emit); }
+    if (write_status(S.emit, sizeof S.emit, 0) >= 0) { hub_emit("status", S.emit); }
 }
 
 /* Push the pending bytes into the session's TX buffer. */
@@ -168,7 +174,7 @@ static void open_link(void) {
     o.uuid = 0x1101;
     o.channel = DRV.channel;
     o.fallback = DRV.fallback;
-    o.level = PEX_CL_LEVEL_OMIT;
+    o.level = S.level;
     o.io = PEX_CL_IO_NONE;
     o.bond = PEX_CL_BOND_OMIT;
     o.drop_key = 1;
@@ -291,6 +297,7 @@ static void report_found(void) {
         pex_jw_t w;
         pex_jw_init(&w, S.emit, sizeof S.emit);
         pex_jw_obj(&w, NULL);
+        pex_jw_str(&w, "driver", DRV.driver);
         pex_jw_str(&w, "addr", a);
         pex_jw_str(&w, "name", S.devs[i].name);
         pex_jw_int(&w, "rssi", S.devs[i].rssi);
@@ -443,6 +450,7 @@ static int devices_json(char *out, size_t cap) {
         char a[18];
         pex_bt_addr_str(S.devs[i].addr, a);
         pex_jw_obj(&w, NULL);
+        pex_jw_str(&w, "driver", DRV.driver);
         pex_jw_str(&w, "addr", a);
         pex_jw_str(&w, "name", S.devs[i].name);
         pex_jw_int(&w, "rssi", S.devs[i].rssi);
@@ -459,6 +467,12 @@ static int do_connect(const char *addr, const char *cfg) {
     if (!addr || pex_bt_addr(addr, a) < 0) { return PEX_EINVAL; }
     int ar = 1;
     if (cfg && pex_json_bool(cfg, "auto_reconnect", &ar) != 1) { ar = 1; }
+    /* Security level 0 unless the printer config says otherwise: the parent
+     * firmware (b397a84) judges the level before BTstack has read the
+     * encryption key size, so a session asking for level >= 2 fails right
+     * after pairing (docs/parent-requirements.md B1). */
+    int64_t lv = 0;
+    S.level = cfg && pex_json_int(cfg, "security_level", &lv) == 1 && lv >= 0 && lv <= 4 ? (uint8_t)lv : 0;
     if (S.h > 0) {
         if (memcmp(a, S.addr, 6) == 0 && S.link != L_IDLE) {
             emit_state();
@@ -522,7 +536,7 @@ int prn_drv(uint32_t cmd, uint32_t a0, uint32_t a1, uint32_t a2) {
     case PRN_DRV_DISCONNECT:
         return do_disconnect();
     case PRN_DRV_STATUS:
-        return write_status((char *)(uintptr_t)a1, a2);
+        return write_status((char *)(uintptr_t)a1, a2, 1);
     case PRN_DRV_JOB_BEGIN:
         return job_begin((const prn_job_t *)(uintptr_t)a0);
     case PRN_DRV_JOB_FEED:

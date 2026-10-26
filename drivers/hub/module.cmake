@@ -1,4 +1,4 @@
-pex_add_module(printer_hub
+prn_add_module(printer_hub
     SOURCES ${CMAKE_CURRENT_LIST_DIR}/printer_hub.c ${CMAKE_CURRENT_LIST_DIR}/../core/prn_core.c
     TARGETS m33 m0p
     MODEL reloc

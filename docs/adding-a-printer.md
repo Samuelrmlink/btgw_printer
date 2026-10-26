@@ -10,7 +10,7 @@ language and moves them over BLE or Bluetooth Classic.
 drivers/vendors/<vendor>/<model>/
   <model>.c          the module: prn_drv(), pex_main()
   <model>_proto.c/h  pure protocol code (framing, status parsing): host-tested
-  module.cmake       pex_add_module(<vendor>_<model> ...)
+  module.cmake       prn_add_module(<vendor>_<model> ...)   (same arguments as pex_add_module)
 ```
 
 `drivers/CMakeLists.txt` picks up every `*/module.cmake` by itself. Give the

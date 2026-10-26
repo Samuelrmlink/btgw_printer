@@ -1,35 +1,218 @@
 {
-  "version": 1,
-  "note": "Fallback model caps for designing with no board or no driver loaded. A loaded driver's printer.drivers caps replace these. Values marked unconfirmed come from listings/refs, not from the printer.",
-  "drivers": [
-    {"driver": "nelko_pm220", "abi": 1, "models": [
-      {"id": "pm220", "vendor": "Nelko", "name": "PM220", "transport": "classic", "dpi": 203, "head_dots": 384,
-       "min_len_mm": 10, "max_len_mm": 200, "media": ["gap", "continuous"],
-       "density": {"min": 0, "max": 15, "default": 8}, "black_bit": 0, "placement": true,
-       "status": ["battery", "paper", "lid", "media"],
-       "presets": ["nelko-pm220-50x30", "nelko-pm220-40x30", "nelko-pm220-30x20"]}]},
-    {"driver": "nelko_pl70e", "abi": 1, "models": [
-      {"id": "pl70e", "vendor": "Nelko", "name": "PL70e-BT", "transport": "ble", "dpi": 203, "head_dots": 832,
-       "min_len_mm": 10, "max_len_mm": 300, "media": ["gap", "continuous", "blackmark"],
-       "density": {"min": 0, "max": 15, "default": 8}, "speed": {"min": 1, "max": 6, "default": 4},
-       "black_bit": 0, "placement": true, "status": ["paper", "lid"], "unconfirmed": ["head_dots", "black_bit", "speed"],
-       "presets": ["nelko-4x6", "nelko-3x1", "nelko-4x4", "nelko-2x1"]}]},
-    {"driver": "nelko_p21", "abi": 1, "models": [
-      {"id": "p21", "vendor": "Nelko", "name": "P21", "transport": "classic", "dpi": 203, "head_dots": 96,
-       "min_len_mm": 20, "max_len_mm": 100, "media": ["gap"],
-       "density": {"min": 1, "max": 15, "default": 10}, "black_bit": 1, "placement": false,
-       "status": ["battery", "paper"], "unconfirmed": ["head_dots", "density"],
-       "presets": ["nelko-p21-14x40", "nelko-p21-14x30", "nelko-p21-14x50"]}]},
-    {"driver": "phomemo_d30", "abi": 1, "models": [
-      {"id": "d30", "vendor": "Phomemo", "name": "D30", "transport": "ble", "dpi": 203, "head_dots": 96,
-       "min_len_mm": 20, "max_len_mm": 100, "media": ["gap"],
-       "density": {"min": 1, "max": 15, "default": 8}, "black_bit": 1, "placement": false,
-       "status": ["battery"], "unconfirmed": ["transport", "head_dots", "density"],
-       "presets": ["phomemo-d30-12x40", "phomemo-d30-14x40", "phomemo-d30-15x30"]}]},
-    {"driver": "virtual", "abi": 1, "models": [
-      {"id": "virtual", "vendor": "Test", "name": "Virtual printer", "transport": "none", "dpi": 203, "head_dots": 832,
-       "min_len_mm": 5, "max_len_mm": 400, "media": ["gap", "continuous", "blackmark"],
-       "density": {"min": 0, "max": 15, "default": 8}, "speed": {"min": 1, "max": 6, "default": 3},
-       "black_bit": 1, "placement": true, "status": [], "presets": []}]}
-  ]
+ "version": 1,
+ "note": "Fallback model caps for designing with no board or no driver loaded. A loaded driver's printer.drivers caps replace these. drivers/test/test_caps.c checks that every field here matches the driver's own caps. Values listed in \"unconfirmed\" come from references, not from a printer on the bench.",
+ "drivers": [
+  {
+   "driver": "nelko_pm220",
+   "abi": 1,
+   "models": [
+    {
+     "id": "pm220",
+     "vendor": "Nelko",
+     "name": "PM220",
+     "transport": "classic",
+     "dpi": 203,
+     "head_dots": 384,
+     "min_len_mm": 10,
+     "max_len_mm": 200,
+     "media": [
+      "gap",
+      "continuous",
+      "blackmark"
+     ],
+     "density": {
+      "min": 0,
+      "max": 15,
+      "default": 8
+     },
+     "black_bit": 0,
+     "placement": true,
+     "status": [
+      "battery",
+      "paper",
+      "lid",
+      "media"
+     ],
+     "presets": [
+      "nelko-pm220-50x30",
+      "nelko-pm220-40x30",
+      "nelko-pm220-40x20",
+      "nelko-pm220-30x20",
+      "nelko-pm220-50x20",
+      "nelko-pm220-50x80"
+     ],
+     "speed": null,
+     "copies": true
+    }
+   ]
+  },
+  {
+   "driver": "nelko_pl70e",
+   "abi": 1,
+   "models": [
+    {
+     "id": "pl70e",
+     "vendor": "Nelko",
+     "name": "PL70e-BT",
+     "transport": "ble",
+     "dpi": 203,
+     "head_dots": 832,
+     "min_len_mm": 10,
+     "max_len_mm": 300,
+     "media": [
+      "gap",
+      "continuous"
+     ],
+     "density": {
+      "min": 0,
+      "max": 15,
+      "default": 8
+     },
+     "speed": null,
+     "black_bit": 0,
+     "placement": true,
+     "status": [
+      "paper",
+      "lid",
+      "overheat"
+     ],
+     "unconfirmed": [],
+     "presets": [
+      "nelko-4x6",
+      "nelko-3x1",
+      "nelko-4x4",
+      "nelko-4x3",
+      "nelko-2x1"
+     ],
+     "copies": true
+    }
+   ]
+  },
+  {
+   "driver": "nelko_p21",
+   "abi": 1,
+   "models": [
+    {
+     "id": "p21",
+     "vendor": "Nelko",
+     "name": "P21",
+     "transport": "classic",
+     "dpi": 203,
+     "head_dots": 96,
+     "min_len_mm": 15,
+     "max_len_mm": 100,
+     "media": [
+      "gap",
+      "continuous"
+     ],
+     "density": {
+      "min": 1,
+      "max": 15,
+      "default": 8
+     },
+     "black_bit": 0,
+     "placement": false,
+     "status": [
+      "battery",
+      "paper",
+      "lid",
+      "media"
+     ],
+     "unconfirmed": [
+      "density"
+     ],
+     "presets": [
+      "nelko-p21-14x40",
+      "nelko-p21-12x40",
+      "nelko-p21-14x50",
+      "nelko-p21-14x75",
+      "nelko-p21-15x30",
+      "nelko-p21-14x30"
+     ],
+     "speed": null,
+     "copies": false,
+     "orientation": "along_feed"
+    }
+   ]
+  },
+  {
+   "driver": "phomemo_d30",
+   "abi": 1,
+   "models": [
+    {
+     "id": "d30",
+     "vendor": "Phomemo",
+     "name": "D30",
+     "transport": "classic",
+     "dpi": 203,
+     "head_dots": 96,
+     "min_len_mm": 15,
+     "max_len_mm": 100,
+     "media": [
+      "gap"
+     ],
+     "density": {
+      "min": 0,
+      "max": 0,
+      "default": 0
+     },
+     "black_bit": 1,
+     "placement": false,
+     "status": [],
+     "unconfirmed": [
+      "density",
+      "presets"
+     ],
+     "presets": [
+      "phomemo-d30-12x40",
+      "phomemo-d30-12x30",
+      "phomemo-d30-14x40",
+      "phomemo-d30-15x30",
+      "phomemo-d30-12x22"
+     ],
+     "speed": null,
+     "copies": false,
+     "orientation": "along_feed"
+    }
+   ]
+  },
+  {
+   "driver": "printer_virtual",
+   "abi": 1,
+   "models": [
+    {
+     "id": "virtual",
+     "vendor": "btgw_printer",
+     "name": "Virtual printer",
+     "transport": "none",
+     "dpi": 203,
+     "head_dots": 832,
+     "min_len_mm": 5,
+     "max_len_mm": 400,
+     "media": [
+      "gap",
+      "continuous",
+      "blackmark"
+     ],
+     "density": {
+      "min": 0,
+      "max": 15,
+      "default": 8
+     },
+     "speed": {
+      "min": 1,
+      "max": 5,
+      "default": 3
+     },
+     "black_bit": 0,
+     "placement": true,
+     "status": [
+      "battery"
+     ],
+     "presets": [],
+     "copies": false
+    }
+   ]
+  }
+ ]
 }

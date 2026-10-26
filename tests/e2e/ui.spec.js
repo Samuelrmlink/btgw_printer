@@ -8,7 +8,7 @@ test('switching label size on an open label rescales it; a custom size is saved'
   const before = await page.evaluate(() => ({ ...window.btgwPrinter.editor.boxes[0] }));
   await page.keyboard.press('Shift+L');
   await expect(page.locator('#media')).toBeVisible();
-  await expect(page.locator('#media-list li')).toHaveCount(4);
+  await expect(page.locator('#media-list li')).toHaveCount(5);
   await page.locator('#media-list li', { hasText: '3 × 1 in' }).locator('button.row-main').click();
   await expect(page.locator('#media-name')).toHaveText('3 × 1 in');
   const after = await page.evaluate(() => ({ box: { ...window.btgwPrinter.editor.boxes[0] }, w: window.btgwPrinter.page().width_dots, h: window.btgwPrinter.page().height_dots }));

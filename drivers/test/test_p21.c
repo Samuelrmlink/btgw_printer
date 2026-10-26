@@ -137,9 +137,9 @@ static prn_job_t job(uint32_t id, uint32_t rows, int density, int copies) {
     j.width_dots = 96;
     j.row_bytes = 12;
     j.rows_total = rows;
-    j.width_mm10 = 140;
-    j.height_mm10 = 400;
-    j.gap_mm10 = 50;
+    j.width_mm100 = 1400;
+    j.height_mm100 = 4000;
+    j.gap_mm100 = 500;
     j.media_type = PRN_MEDIA_GAP;
     j.density = (int8_t)density;
     j.speed = -1;
@@ -155,6 +155,7 @@ static void t_register_scan(void) {
     CHECK(hs_drv(s_drv, PRN_DRV_INFO, (uint32_t)(uintptr_t)caps, sizeof caps, 0) > 0);
     CHECK_HAS(caps, "\"head_dots\":96");
     CHECK_HAS(caps, "\"black_bit\":0");
+    CHECK_HAS(caps, "\"placement\":false");
     CHECK_EQ(hs_drv(s_drv, PRN_DRV_SCAN, 3000, 0, 0), PEX_OK);
     fh_run(3600);
     CHECK_EQ(hs_count("found", ADDR), 1);
@@ -162,6 +163,8 @@ static void t_register_scan(void) {
     CHECK(hs_drv(s_drv, PRN_DRV_DEVICES, (uint32_t)(uintptr_t)dev, sizeof dev, 0) > 0);
     CHECK_HAS(dev, ADDR);
     CHECK_HAS(dev, "\"name\":\"P21\"");
+    CHECK(dev[0] == '[');
+    CHECK_HAS(dev, "\"driver\":\"nelko_p21\"");
 }
 
 static void t_connect_status(void) {
@@ -172,6 +175,8 @@ static void t_connect_status(void) {
     CHECK_EQ(PR.queries_label, 1);
     char st[640];
     CHECK(hs_drv(s_drv, PRN_DRV_STATUS, 0, (uint32_t)(uintptr_t)st, sizeof st) > 0);
+    CHECK(st[0] == '[');
+    CHECK_HAS(st, "\"driver\":\"nelko_p21\"");
     CHECK_HAS(st, "\"battery\":76");
     CHECK_HAS(st, "\"printer\":\"ready\"");
     CHECK_HAS(st, "\"w_mm\":14");

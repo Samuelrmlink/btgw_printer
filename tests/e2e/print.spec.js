@@ -65,7 +65,7 @@ test('P21 landscape label prints head-wide with the origin baked in', async ({ p
   expect(j.params.width_dots).toBe(96);
   expect(j.params.origin).toEqual([0, 0]);
   const bytes = Buffer.from(j.b64, 'base64');
-  expect(bytes.every((b) => b === 0)).toBe(true); // black_bit 1: white is 0
+  expect(bytes.every((b) => b === 0xff)).toBe(true); // the P21 burns 0 bits, so white is 1
 });
 
 test('a failed job is reported and cancel stops a running one', async ({ page }) => {

@@ -128,9 +128,10 @@ static int p21_head(const prn_job_t *j, uint8_t *out, size_t cap) {
      * its reply is parsed like any other */
     memcpy(out, P21_Q_LABEL, q);
     p21_job_t pj;
-    pj.width_mm10 = j->width_mm10 ? j->width_mm10 : 140;
-    pj.height_mm10 = j->height_mm10 ? j->height_mm10 : 400;
-    pj.gap_mm10 = j->media_type == PRN_MEDIA_CONTINUOUS ? 0 : (j->gap_mm10 ? j->gap_mm10 : 50);
+    /* the job carries hundredths of a mm; the TSPL builder takes tenths */
+    pj.width_mm10 = (uint16_t)(j->width_mm100 ? (j->width_mm100 + 5) / 10 : 140);
+    pj.height_mm10 = (uint16_t)(j->height_mm100 ? (j->height_mm100 + 5) / 10 : 400);
+    pj.gap_mm10 = (uint16_t)(j->media_type == PRN_MEDIA_CONTINUOUS ? 0 : (j->gap_mm100 ? (j->gap_mm100 + 5) / 10 : 50));
     pj.rows = j->rows_total;
     pj.density = j->density < 0 ? 8 : j->density;
     int h = p21_job_head(&pj, (char *)out + q, cap - q);
@@ -189,9 +190,9 @@ static const char CAPS[] =
     "{\"driver\":\"nelko_p21\",\"abi\":1,\"models\":[{\"id\":\"p21\",\"vendor\":\"Nelko\",\"name\":\"P21\","
     "\"transport\":\"classic\",\"dpi\":203,\"head_dots\":96,\"min_len_mm\":15,\"max_len_mm\":100,"
     "\"media\":[\"gap\",\"continuous\"],\"density\":{\"min\":1,\"max\":15,\"default\":8},"
-    "\"speed\":{\"min\":0,\"max\":0,\"default\":0},\"black_bit\":0,\"orientation\":\"along_feed\","
+    "\"speed\":null,\"black_bit\":0,\"copies\":false,\"placement\":false,\"orientation\":\"along_feed\","
     "\"status\":[\"battery\",\"paper\",\"lid\",\"media\"],"
-    "\"presets\":[\"nelko-p21-14x40\",\"nelko-p21-12x40\",\"nelko-p21-14x50\",\"nelko-p21-14x75\",\"nelko-p21-15x30\"]}]}";
+    "\"presets\":[\"nelko-p21-14x40\",\"nelko-p21-12x40\",\"nelko-p21-14x50\",\"nelko-p21-14x75\",\"nelko-p21-15x30\",\"nelko-p21-14x30\"]}]}";
 
 static const spp_drv_t DRV = {
     .driver = "nelko_p21",

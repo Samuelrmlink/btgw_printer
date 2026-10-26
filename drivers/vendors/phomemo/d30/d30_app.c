@@ -48,7 +48,7 @@ static const char CAPS[] =
     "{\"driver\":\"phomemo_d30\",\"abi\":1,\"models\":[{\"id\":\"d30\",\"vendor\":\"Phomemo\",\"name\":\"D30\","
     "\"transport\":\"classic\",\"dpi\":203,\"head_dots\":96,\"min_len_mm\":15,\"max_len_mm\":100,"
     "\"media\":[\"gap\"],\"density\":{\"min\":0,\"max\":0,\"default\":0},"
-    "\"speed\":{\"min\":0,\"max\":0,\"default\":0},\"black_bit\":1,\"orientation\":\"along_feed\","
+    "\"speed\":null,\"black_bit\":1,\"copies\":false,\"placement\":false,\"orientation\":\"along_feed\","
     "\"status\":[],"
     "\"presets\":[\"phomemo-d30-12x40\",\"phomemo-d30-12x30\",\"phomemo-d30-14x40\",\"phomemo-d30-15x30\",\"phomemo-d30-12x22\"]}]}";
 
