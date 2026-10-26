@@ -113,6 +113,7 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
         if (listIndex >= files.length) {
             listIndex = Math.max(0, files.length - 1);
         }
+        rowCol = 0;
         paintCurrent();
     }
 

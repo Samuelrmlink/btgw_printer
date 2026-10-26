@@ -1197,3 +1197,18 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 
 .picker-panel .row { display: flex; gap: 8px; }
 .picker-panel .row > * { flex: 1; }
+
+/* every dialog root (the pm220 ones have their own rules above) */
+[data-overlay] {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    touch-action: none;
+}
+#prompt, #wifi-sub { z-index: 30; }
+#confirm { z-index: 40; }
+#printers .picker-panel, #media .picker-panel, #vars .picker-panel { width: min(640px, 96vw); max-width: 640px; }

@@ -314,7 +314,10 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass   # the page went away mid-reply (a reload in a test)
 
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)

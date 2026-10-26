@@ -159,6 +159,7 @@ export function bindPrint(ctx) {
             return false;
         }
         running = { cancelled: false, jobId: null };
+        ctx.changed && ctx.changed();
         const defs = effectiveDefs(cur.objects, cur.vars);
         const varies = defs.some((d) => d.type === "counter") || cur.objects.some((o) => /\{\{\s*n\s*(:[^}]*)?\}\}/.test(o.text || o.payload || ""));
         const cs = counterStore(cur.docName);
@@ -197,6 +198,7 @@ export function bindPrint(ctx) {
             }
             running = null;
             bar(null);
+            ctx.changed && ctx.changed();
         }
     }
 
@@ -215,6 +217,7 @@ export function bindPrint(ctx) {
         } finally {
             running = null;
             bar(null);
+            ctx.changed && ctx.changed();
         }
     }
 

@@ -568,7 +568,11 @@ function applyPage({ rescale = false } = {}) {
 
 function setModel(model, { keepMedia = false } = {}) {
     state.model = model;
-    if (!keepMedia || !state.media || !mediaFor(model).some((m) => m.id === state.media.id)) {
+    // Keep the label size if it is meant for this model, or if it came with a
+    // document and is not in the library at all.
+    const keep = keepMedia && state.media &&
+        (mediaFor(model).some((m) => m.id === state.media.id) || !findMedia(state.media.id));
+    if (!keep) {
         const list = mediaFor(model);
         const pref = (model.presets || []).map((id) => findMedia(id)).find(Boolean);
         const m = pref || list[0] || state.media;
@@ -1112,6 +1116,7 @@ const printer = bindPrint({
         return st === "connected" || st === "printing" || st === "idle";
     },
     openPrinters: () => printersUi.open(),
+    changed: () => refreshPrinterUi(),
 });
 
 
@@ -1478,7 +1483,15 @@ $("nudge-pad").addEventListener("focusout", () => setTimeout(markNudgeFocus, 0))
 wrapNumSpins("aside input[inputmode='numeric'], #cal input[inputmode='numeric'], #cal input[inputmode='decimal']");
 bindSpinHolds();
 
+// A message (saved, printed, an error) stays up a while before the line goes
+// back to showing the printer's state.
+const MSG_MS = 8000;
+let msgAt = 0;
 function setStatus(msg, kind) {
+    msgAt = Date.now();
+    showStatus(msg, kind);
+}
+function showStatus(msg, kind) {
     const el = $("status");
     el.textContent = msg;
     el.className = kind || "";
@@ -1492,14 +1505,17 @@ function refreshPrinterUi() {
     const up = st === "connected" || st === "idle" || st === "printing";
     $("printer-btn").classList.toggle("ok", !!up);
     $("print").disabled = !up || printer.busy();
+    if (Date.now() - msgAt < MSG_MS) {
+        return;
+    }
     if (!ws.connected) {
-        setStatus(`board unreachable (${deviceLabel()})`, "err");
+        showStatus(`board unreachable (${deviceLabel()})`, "err");
     } else if (!printersUi.hubUp()) {
-        setStatus(`no printer_hub on ${deviceLabel()} · designing only`, "");
+        showStatus(`no printer_hub on ${deviceLabel()} · designing only`, "");
     } else if (!p) {
-        setStatus("no printer selected", "");
+        showStatus("no printer selected", "");
     } else {
-        setStatus(`${p.nickname || p.addr}: ${printersUi.stateText(p.addr)}`, up ? "ok" : "");
+        showStatus(`${p.nickname || p.addr}: ${printersUi.stateText(p.addr)}`, up ? "ok" : "");
     }
 }
 
@@ -1522,21 +1538,18 @@ async function onBoard() {
     const mode = await readJsonOr("printer/mode.json", null).catch(() => null);
     $("mode-switch").hidden = !(mode && mode.mode === "companion");
     await Promise.all([loadUserMedia(), loadPrinters()]);
-    const had = !!state.model;
     await printersUi.refreshDrivers();
-    // A live driver's caps may differ from the shipped ones: re-derive.
+    // The selected printer decides the model; a live driver's caps replace the
+    // shipped ones (same key, maybe different numbers).
     const p = currentPrinter();
     const m = (p && findModel({ driver: p.driver, id: p.model })) || (state.model && findModel(state.model.key)) || defaultModel();
-    if (!had || m !== state.model) {
-        state.model = m;
-        if (!state.media) {
-            setModel(m);
-        }
-    }
-    applyPage();
+    const switched = !state.model || m.key !== state.model.key;
+    setModel(m, { keepMedia: true });
+    applyPage({ rescale: switched });
     await printersUi.refreshStatus();
     printersUi.autoConnect();
     refreshPrinterUi();
+    state.boardReady = true;
 }
 
 ws.on("_open", () => {
