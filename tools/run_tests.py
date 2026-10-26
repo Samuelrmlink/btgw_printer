@@ -4,6 +4,9 @@
   tools/run_tests.py              every tier that needs no board
   tools/run_tests.py drivers      native driver tests (fake host, gcc -m32)
   tools/run_tests.py pex          cross-build the .pex modules and dump them
+  tools/run_tests.py web          web unit tests (node --test) and Playwright e2e on the mock board
+  tools/run_tests.py sim          end to end in mcusim: standalone image + our modules + simulated
+                                  printers (tools/e2e_sim.py; skipped without mcusim's printer-sims build)
 Other suites (web) add themselves to SUITES.
 """
 import os, subprocess, sys
@@ -32,11 +35,26 @@ def pex():
     return rc
 
 
-SUITES = {"drivers": drivers, "pex": pex}
+def web():
+    rc = subprocess.call(["npm", "run", "-s", "test:unit"], cwd=ROOT)
+    return rc | subprocess.call(["npx", "playwright", "test"], cwd=ROOT)
+
+
+def sim():
+    rc = subprocess.call([sys.executable, os.path.join(ROOT, "tools", "e2e_sim.py")])
+    if rc == 77:
+        print("sim: skipped")
+        return 0
+    return rc
+
+
+SUITES = {"drivers": drivers, "pex": pex, "web": web, "sim": sim}
+# the default run: everything that needs no board and no simulator build
+DEFAULT = ["drivers", "pex", "web"]
 
 
 def main():
-    names = sys.argv[1:] or list(SUITES)
+    names = sys.argv[1:] or DEFAULT
     rc = 0
     for n in names:
         if n not in SUITES:

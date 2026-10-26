@@ -68,6 +68,12 @@ static uint8_t s_level;
 static uint32_t s_t_retry, s_mtu, s_room_max;
 static char s_pins[PINS][16];
 static int s_npins, s_pin_i;
+/* The PIN the next attempt starts with. The firmware fails the whole session
+ * when the printer rejects a PIN (seen in mcusim against b397a84: HCI
+ * authentication failure 0x05, then FAILED with why rfcomm, not auth), so a
+ * PIN list can only be walked across attempts: an attempt that answered a
+ * PIN and failed before OPEN moves this on. */
+static int s_pin_next;
 static char s_pin_used[16];
 static char s_why[48];
 
@@ -220,7 +226,7 @@ static int open_link(void) {
     o.npin = 0;                      /* every PIN request comes to us: see on_cl */
     o.fn = on_cl;
     o.arg = NULL;
-    s_pin_i = 0;
+    s_pin_i = s_pin_next < s_npins ? s_pin_next : 0;
     s_pin_used[0] = 0;
     int h = pex_bt_classic_open(&o);
     if (h < 0) { return h; }
@@ -279,6 +285,7 @@ static void on_cl(void *arg, const pex_cl_event_t *ev) {
         s_link = L_OPEN;
         s_backoff_n = 0;
         s_auth_fails = 0;
+        if (s_pin_i > 0) { s_pin_next = s_pin_i - 1; }   /* this PIN works: first next time */
         if (pex_bt_classic_state(ev->handle, &in) == PEX_OK) {
             s_channel = in.channel;
             s_mtu = in.mtu;
@@ -316,11 +323,27 @@ static void on_cl(void *arg, const pex_cl_event_t *ev) {
             emit_state();
             break;
         }
-        if (ev->why == 3 && ++s_auth_fails >= 3) {
-            s_want = 0;               /* three rounds of every PIN: stop asking */
+        int pinned = s_link == L_OPENING && s_pin_used[0];
+        if (pinned) {
+            /* a PIN was answered and the attempt failed: the next one tries
+             * the next PIN, at once rather than after the backoff */
+            s_pin_next = s_pin_i;
+            if (s_pin_next >= s_npins) {
+                s_pin_next = 0;
+                if (++s_auth_fails >= 3) {
+                    s_want = 0;       /* three rounds of every PIN: stop asking */
+                    pex_log(PEX_LOG_WARN, "pm220: pairing failed with every PIN");
+                }
+            }
+        } else if (ev->why == 3 && ++s_auth_fails >= 3) {
+            s_want = 0;
             pex_log(PEX_LOG_WARN, "pm220: pairing failed with every PIN");
         }
         schedule_retry(w);
+        if (pinned && s_want && s_pin_next != 0) {
+            s_backoff_n = 0;
+            s_t_retry = pex_ms() + 500u;
+        }
         break;
     }
     }
@@ -557,6 +580,7 @@ static int connect_(const char *addr, const char *cfg) {
     memcpy(s_addr, a, 6);
     prn_addr_fmt(a, s_addr_s);
     build_pins(cfg);
+    s_pin_next = 0;
     int64_t ch = 0;
     s_channel = cfg && pex_json_int(cfg, "channel", &ch) && ch > 0 && ch < 31 ? (uint8_t)ch : 0;
     int64_t lv = 0;
