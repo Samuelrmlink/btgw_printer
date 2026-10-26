@@ -60,7 +60,7 @@ def reset_state():
             "next_job": 1,
             "fail_next": None,
             "job_ms": 30,
-            "wifi": {"mode": "auto", "want": "auto", "ssid": "BenchNet", "ip": "10.0.0.23", "ap": False, "ap_ssid": "BTGW-Printer",
+            "wifi": {"mode": "sta", "want": "auto", "ssid": "BenchNet", "ip": "10.0.0.23", "ap": False, "ap_ssid": "BTGW-Printer",
                      "ap_psk": "printer123", "ap_clients": 0, "error": ""},
             "known": [{"ssid": "BenchNet", "psk": "secret", "current": True}],
             "wg": {"configured": True, "connected": True, "confirmed": True, "address": "10.255.255.23",
@@ -126,6 +126,7 @@ def op(name, p):
 def test_op(name, p):
     S = STATE
     if name == "test.reset":
+        OPTS["hub"] = OPTS.get("hub_default", True)
         reset_state()
         return {"ok": True}
     if name == "test.jobs":
@@ -134,6 +135,8 @@ def test_op(name, p):
         for k in ("fail_next", "job_ms"):
             if k in p:
                 S[k] = p[k]
+        if "hub" in p:
+            OPTS["hub"] = bool(p["hub"])
         return {"ok": True}
     if name == "test.file":
         b = fs_get(p.get("path", ""))
@@ -555,7 +558,7 @@ def main():
     ap.add_argument("--no-sd", action="store_true")
     ap.add_argument("--no-hub", action="store_true")
     a = ap.parse_args()
-    OPTS.update(mode=a.mode, sd=not a.no_sd, hub=not a.no_hub)
+    OPTS.update(mode=a.mode, sd=not a.no_sd, hub=not a.no_hub, hub_default=not a.no_hub)
     reset_state()
     print("mock board on http://%s:%d/printer/ (%s%s%s)" % (a.bind, a.port, a.mode, "" if OPTS["sd"] else ", no SD",
                                                             "" if OPTS["hub"] else ", no printer_hub"), flush=True)
