@@ -32,3 +32,4 @@ CFLAGS += -DGOLDEN_DIR='"$(ROOT)/drivers/vendors/nelko/p21/test"'
 # header dependencies (an included .inc.c change must rebuild its module)
 CFLAGS += -MMD -MP
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
+-include pl70e.mk
