@@ -134,3 +134,10 @@ hub needs a reboot while it would run from RAM (R11 item 3).
 Reboots today, each forced by a firmware bug: one for R11 items 1-2 (driver
 install size, reservations), one for R11 item 3 (hub running from RAM left
 336 B of pool).
+
+**2026-10-27, later (on dev 3a3f531):**
+- **PL70e 4 × 6:** the calibration test page and a label printed from the app. The owner's photo shows the test page well placed (no offset needed), as the 3 × 1 one was. The label itself was poor: new objects keep small-label sizes on a 4 × 6 and stack at the top-left (to fix in the app; see the roadmap).
+- **Paper out:** the roll ran out after two labels, as expected. The driver refused the next job, but the hub said "not connected". Fixed in 3a3f531 (`PRN_DRV_ENOTREADY`, "printer not ready (paper out or lid open?)"). The new nelko_pl70e is on the board; the new hub is not (R11 item 3), so the board still says "refused" for it.
+- **Reboot:** replacing nelko_pl70e needed one. The 9,860 B file didn't fit the pool's largest free piece (9,744 B, even with nelko_tspl unloaded, since it runs from flash) while Anker and the hub were loaded. That is R11 item 1. Uninstalling worked without a reboot (B5 fix confirmed).
+- **Open: the PL70e went silent after the 3 × 1 roll was reloaded** (and after the reboot). BLE connects, but no READSTA reply comes back (paper, lid and printer all stay "unknown"). A 3 × 1 job was sent in full (15,730 B, PRINT included, no writes in flight) and nothing printed; the hub's job stayed "printing" and the app gave up after 60 s ("the printer stopped answering"). Disconnect + connect didn't change it. Not yet known: the printer's own state after the reload (light, button), and what the Nelko app does after a paper load. The decompiled app is being mapped for the printer's states (docs/protocols/nelko-states.md).
+- **Not driver-side yet:** a job the printer never answers stays "printing" in the hub; the driver should give up (time out to failed) when READSTA gets no answer during a job.
