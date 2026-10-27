@@ -9,7 +9,8 @@
  *   - find: inquiry, keeping devices whose name matches a model's name rule.
  *     A device with no name yet (Class of Device major class 6, imaging) is
  *     held until the inquiry ends, and reported with "model":null only if it
- *     still has no name: the user picks the model;
+ *     still has no name: the user picks the model. A name that comes later
+ *     re-reports it (with its model, or "gone":true when it is not ours);
  *   - link: RFCOMM to the SPP UUID 0x1101 (channel 1 when SDP has no record),
  *     legacy PIN answered from the model's list (a PIN that worked before
  *     first) through PEX_CL_PIN, so the firmware's one drop-key retry tries
@@ -51,7 +52,10 @@ PEX_WEAK_IMPORT(pex_bt_classic_forget);
 #define PREFLIGHT_MS 1500u
 #define BUSY_WAIT_MS 10000u
 #define AFTER_MS 15000u
-#define NAME_GRACE_MS 2000u
+#define NAME_GRACE_MS 6000u
+/* after the scan: how long a device reported without a name is watched for
+ * its name (the radio asks for names one at a time, a few seconds each) */
+#define NAME_WATCH_MS 20000u
 #define BACKOFF_FIRST_MS 8000u
 #define BACKOFF_MAX_MS 60000u
 #define DEVS 16
@@ -142,7 +146,9 @@ static int s_have_bat, s_have_cfg, s_have_st, s_ready = -1;
 static int s_scanning;      /* S_* */
 static uint32_t s_t_scan;
 static uint8_t s_seen[DEVS][6];
+static uint8_t s_seen_unnamed[DEVS];   /* reported with "model":null */
 static int s_nseen;
+static uint32_t s_t_watch;             /* end of the late-name watch, 0 = off */
 
 /* the job */
 static int s_job;
@@ -699,22 +705,64 @@ static int devices_json(char *out, size_t cap) {
     return pex_jw_finish(&w);
 }
 
-static void report(const pex_cl_dev_t *d, const model_t *m) {
-    for (int k = 0; k < s_nseen; k++) {
-        if (memcmp(s_seen[k], d->addr, 6) == 0) { return; }
-    }
-    if (s_nseen >= DEVS) { return; }
-    memcpy(s_seen[s_nseen++], d->addr, 6);
+static void emit_found(const pex_cl_dev_t *d, const model_t *m, int gone) {
     pex_jw_t w;
     pex_jw_init(&w, s_out, sizeof s_out);
-    dev_obj(&w, d, m);
+    if (gone) {
+        char a[18];
+        prn_addr_fmt(d->addr, a);
+        pex_jw_obj(&w, NULL);
+        pex_jw_str(&w, "driver", s_self);
+        pex_jw_str(&w, "addr", a);
+        pex_jw_str(&w, "name", d->name);
+        pex_jw_bool(&w, "gone", 1);
+        pex_jw_end(&w);
+    } else {
+        dev_obj(&w, d, m);
+    }
     if (pex_jw_finish(&w) > 0) { prn_hub_emit(&s_hub, "found", s_out); }
 }
 
+static int seen_at(const uint8_t *addr) {
+    for (int k = 0; k < s_nseen; k++) {
+        if (memcmp(s_seen[k], addr, 6) == 0) { return k; }
+    }
+    return -1;
+}
+
+/* k = classify(): 1 = one of ours by name, 2 = no name yet */
+static void report(const pex_cl_dev_t *d, const model_t *m, int k) {
+    int i = seen_at(d->addr);
+    if (i >= 0) {
+        /* reported without a name: its name has come since */
+        if (s_seen_unnamed[i] && d->name[0]) {
+            s_seen_unnamed[i] = 0;
+            emit_found(d, m, k != 1);
+        }
+        return;
+    }
+    if (k == 0 || s_nseen >= DEVS) { return; }
+    memcpy(s_seen[s_nseen], d->addr, 6);
+    s_seen_unnamed[s_nseen++] = k == 2;
+    emit_found(d, m, 0);
+}
+
 static void scan_step(void) {
-    if (!s_scanning || pex_ms() - s_t_scan < 250) { return; }
+    if (!s_scanning && !s_t_watch) { return; }
+    if (pex_ms() - s_t_scan < 250) { return; }
     pex_cl_dev_t d[DEVS];
     int n = pex_bt_classic_devices(d, DEVS, 0, 0, NULL);
+    if (!s_scanning) {
+        /* watching for late names only */
+        s_t_scan = pex_ms();
+        for (int i = 0; i < n; i++) {
+            const model_t *m;
+            int k = classify(&d[i], &m);
+            report(&d[i], m, k);
+        }
+        if ((int32_t)(pex_ms() - s_t_watch) >= 0) { s_t_watch = 0; }
+        return;
+    }
     if (s_scanning == S_INQUIRY && !pex_bt_classic_scanning()) {
         /* names still being asked for may come a moment after the inquiry */
         s_scanning = S_GRACE;
@@ -725,10 +773,11 @@ static void scan_step(void) {
     for (int i = 0; i < n; i++) {
         const model_t *m;
         int k = classify(&d[i], &m);
-        if (k == 1 || (k == 2 && done)) { report(&d[i], m); }
+        if (k == 1 || (k == 2 && done) || (k == 0 && seen_at(d[i].addr) >= 0)) { report(&d[i], m, k); }
     }
     if (done) {
         s_scanning = S_OFF;
+        s_t_watch = (pex_ms() + NAME_WATCH_MS) | 1u;
         emit_state();
     }
 }
@@ -839,6 +888,7 @@ int prn_drv(uint32_t cmd, uint32_t a0, uint32_t a1, uint32_t a2) {
             if (rc < 0 && rc != PEX_EBUSY) { return rc; }
             s_scanning = S_INQUIRY;
             s_nseen = 0;
+            s_t_watch = 0;
             s_t_scan = pex_ms();
             emit_state();
         }

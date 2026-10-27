@@ -1,7 +1,8 @@
 /* nelko_tspl's inquiry filter on the fake host, with the real printer_hub.
  * A device is claimed only when a model's name rule matches. A device with
  * no name yet is held until the inquiry ends (plus a short wait for late
- * names) and reported with "model":null only if it is still unnamed.
+ * names) and reported with "model":null only if it is still unnamed; a
+ * name that comes after that re-reports it (with its model, or "gone").
  *
  * The bench case that started this: a PL70e-BT (Classic DC:0D:30:89:6C:C5,
  * CoD 0x040680, imaging) shows up in the inquiry without a name, and its
@@ -43,6 +44,14 @@ static const char *found_ev(const char *addr) {
     return "";
 }
 
+static const char *found_last(const char *addr) {
+    const char *e = "";
+    for (int i = 0; i < fh_events("printer.found"); i++) {
+        if (strstr(fh_event("printer.found", i), addr)) { e = fh_event("printer.found", i); }
+    }
+    return e;
+}
+
 static void t_unnamed_then_named_not_claimed(void) {
     /* the name comes 300 ms after the inquiry result, while the inquiry runs */
     fh_reset();
@@ -52,7 +61,7 @@ static void t_unnamed_then_named_not_claimed(void) {
     fh_run(1000);
     CHECK(fh_op("printer.devices", "{}", R, sizeof R) > 0);
     CHECK(!strstr(R, PL70E));
-    fh_run(4000);
+    fh_run(7500);
     CHECK_EQ(found(PL70E), 0);
     CHECK(fh_op("printer.devices", "{}", R, sizeof R) > 0);
     CHECK(!strstr(R, PL70E));
@@ -60,13 +69,13 @@ static void t_unnamed_then_named_not_claimed(void) {
 
     /* the name comes after the inquiry has ended (within the wait for names) */
     fh_reset();
-    peer(PL70E, "PL70e-BT_6CC5", 0x040680, 1, 2500);
+    peer(PL70E, "PL70e-BT_6CC5", 0x040680, 1, 5000);
     start();
     CHECK(fh_op("printer.scan", "{\"ms\":2000}", R, sizeof R) > 0);
     fh_run(2200);
     CHECK(fh_op("printer.devices", "{}", R, sizeof R) > 0);
     CHECK(!strstr(R, PL70E));      /* still unnamed, but the wait is not over */
-    fh_run(3000);
+    fh_run(7000);
     CHECK_EQ(found(PL70E), 0);
     CHECK(fh_op("printer.devices", "{}", R, sizeof R) > 0);
     CHECK(!strstr(R, PL70E));
@@ -89,7 +98,7 @@ static void t_names_pick_the_model(void) {
     CHECK_HAS(found_ev(PM220), "\"model\":\"pm220\"");
     CHECK_HAS(found_ev(QUIET), "\"model\":\"pm220\"");
     CHECK_HAS(found_ev(P21), "\"driver\":\"nelko_tspl\"");
-    fh_run(5000);
+    fh_run(8000);
     /* once each */
     CHECK_EQ(found(P21), 1);
     CHECK_EQ(found(PM220), 1);
@@ -101,7 +110,7 @@ static void t_names_pick_the_model(void) {
     CHECK(!strstr(R, PHONE));
     /* a second scan reports them again, once */
     CHECK(fh_op("printer.scan", "{\"ms\":1000}", R, sizeof R) > 0);
-    fh_run(3500);
+    fh_run(7500);
     CHECK_EQ(found(P21), 2);
 
     /* connect with no model in the config: the inquiry's name picks it */
@@ -109,6 +118,33 @@ static void t_names_pick_the_model(void) {
     CHECK(fh_op("printer.connect", "{\"driver\":\"nelko_tspl\",\"addr\":\"" P21 "\"}", R, sizeof R) > 0);
     CHECK(wait_ev_after(from, "printer.state", "\"connected\"", "\"model\":\"p21\"", 3000));
     CHECK_EQ(fh_events("printer.log"), 0);
+}
+
+/* On the bench the radio asked for names one at a time and the PM220's came
+ * after the wait: it was reported with "model":null and never corrected. */
+static void t_late_name_re_reports(void) {
+    fh_reset();
+    peer(PM220, "PM220", 0x040680, 1, 11000);
+    peer(PL70E, "PL70e-BT_6CC5", 0x040680, 1, 12000);
+    start();
+    CHECK(fh_op("printer.scan", "{\"ms\":2000}", R, sizeof R) > 0);
+    fh_run(9000);
+    CHECK_EQ(found(PM220), 1);
+    CHECK_HAS(found_ev(PM220), "\"model\":null");
+    CHECK_EQ(found(PL70E), 1);
+    CHECK_HAS(fh_event_last("printer.state"), "\"idle\"");
+    fh_run(5000);
+    CHECK_EQ(found(PM220), 2);
+    CHECK_EQ(found(PL70E), 2);
+    CHECK_HAS(found_last(PM220), "\"model\":\"pm220\"");
+    CHECK_HAS(found_last(PM220), "\"name\":\"PM220\"");
+    CHECK_HAS(found_last(PL70E), "\"gone\":true");
+    CHECK(fh_op("printer.devices", "{}", R, sizeof R) > 0);
+    CHECK_HAS(R, "\"addr\":\"" PM220 "\",\"name\":\"PM220\"");
+    CHECK(!strstr(R, PL70E));
+    fh_run(25000);
+    CHECK_EQ(found(PM220), 2);                       /* not again */
+    CHECK_EQ(found(PL70E), 2);
 }
 
 static void t_unnamed_to_the_end(void) {
@@ -122,7 +158,7 @@ static void t_unnamed_to_the_end(void) {
     CHECK(fh_op("printer.devices", "{}", R, sizeof R) > 0);
     CHECK(!strstr(R, QUIET));
     CHECK_HAS(fh_event_last("printer.state"), "\"scanning\"");
-    fh_run(2500);
+    fh_run(6500);
     CHECK_EQ(found(QUIET), 1);
     CHECK_HAS(found_ev(QUIET), "\"name\":\"\"");
     CHECK_HAS(found_ev(QUIET), "\"model\":null");
@@ -155,5 +191,6 @@ int main(void) {
     RUN(t_unnamed_then_named_not_claimed);
     RUN(t_names_pick_the_model);
     RUN(t_unnamed_to_the_end);
+    RUN(t_late_name_re_reports);
     T_DONE();
 }

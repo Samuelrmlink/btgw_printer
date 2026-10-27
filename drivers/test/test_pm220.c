@@ -172,8 +172,8 @@ static void t_scan_filters(void) {
     CHECK_STR(R, "{\"started\":[\"nelko_tspl\"]}");
     CHECK(wait_ev("printer.found", ADDR, NULL, 1000));
     CHECK(wait_ev("printer.found", ADDR, "\"model\":\"pm220\"", 10));
-    /* the inquiry (2 s), then the wait for late names (2 s) */
-    fh_run(4300);
+    /* the inquiry (2 s), then the wait for late names (6 s) */
+    fh_run(8300);
     CHECK(fh_op("printer.devices", "{}", R, sizeof R) > 0);
     CHECK_HAS(R, "\"addr\":\"" ADDR "\",\"name\":\"PM220\"");
     CHECK_HAS(R, "\"name\":\"PM220-9F\",\"rssi\":-60,\"model\":\"pm220\"");
