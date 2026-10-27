@@ -70,7 +70,8 @@ enum {
     F_ANYWHERE = 1,     /* the name rule matches anywhere in the name, else at its start */
     F_PLACEMENT = 2,    /* BITMAP x,y: the bitmap may be narrower than the head */
     F_COPIES = 4,       /* PRINT n; else the hub feeds the rows once per copy */
-    F_CODES = 8,        /* the status byte is a code (nk_status_name), not bits */
+    F_CODES = 8,        /* the status byte is a code (nk_status_name), not bits: the Nelko app
+                         * compares it with == for every command-0 model (PM220, P21, ...) */
     F_AFTER = 16,       /* ESC !? after the job: an error code fails it */
     F_ESC_CRLF = 32,    /* ESC !? is followed by CRLF */
     F_P21_TEXT = 64,    /* the job text nelko-p21-rs sends: "14.0 mm", DIRECTION 1,1, BITMAP 0,0 */
@@ -88,7 +89,7 @@ typedef struct {
 } model_t;
 
 static const model_t MODELS[] = {
-    { "pm220", "PM220", 384, 0, 15, F_ANYWHERE | F_PLACEMENT | F_COPIES | F_ESC_CRLF, { "0000", "1234" },
+    { "pm220", "PM220", 384, 0, 15, F_ANYWHERE | F_PLACEMENT | F_COPIES | F_ESC_CRLF | F_CODES, { "0000", "1234" },
       "{\"id\":\"pm220\",\"vendor\":\"Nelko\",\"name\":\"PM220\",\"transport\":\"classic\","
       "\"dpi\":203,\"head_dots\":384,\"min_len_mm\":10,\"max_len_mm\":200,\"media\":[\"gap\",\"continuous\",\"blackmark\"],"
       "\"density\":{\"min\":0,\"max\":15,\"default\":8},\"speed\":null,\"black_bit\":0,\"copies\":true,\"placement\":true,"
@@ -250,7 +251,14 @@ static const char *verdict(int b, int *busy) {
     *busy = 0;
     if (s_model->flags & F_CODES) {
         if (b == 0x20 || b == 0x02) { *busy = 1; return NULL; }
-        return nk_status_error(b) ? nk_status_name(b) : NULL;
+        if (!nk_status_error(b)) { return NULL; }
+        switch (b) {
+        case 0x01: return "lid open";
+        case 0x04: case 0x24: return "out of paper";
+        case 0x10: return "paused";
+        case 0x80: return "overheated";
+        default: return nk_status_name(b);
+        }
     }
     if (b & NK_READY_LID) { return "lid open"; }
     if (b & NK_READY_PAPER) { return "out of paper"; }

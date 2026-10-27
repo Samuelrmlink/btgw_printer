@@ -314,7 +314,7 @@ static void t_printer_error(void) {
     CHECK_EQ(hs_drv(s_drv, PRN_DRV_JOB_BEGIN, (uint32_t)(uintptr_t)&j, 0, 0), PEX_OK);
     CHECK(fh_run_until(hs_done, NULL, 5000));
     CHECK_EQ(HS.done_outcome, PRN_JOB_FAILED);
-    CHECK_STR(HS.done_msg, "no_paper");
+    CHECK_STR(HS.done_msg, "out of paper");
     CHECK_EQ(PR.bitmaps, 0);
     /* the paper runs out during the job: the status after it fails the job */
     PR.status = 0;
@@ -327,7 +327,7 @@ static void t_printer_error(void) {
     CHECK(fh_run_until(hs_done, NULL, 5000));
     CHECK_EQ(HS.done_id, 4);
     CHECK_EQ(HS.done_outcome, PRN_JOB_FAILED);
-    CHECK_STR(HS.done_msg, "no_paper");
+    CHECK_STR(HS.done_msg, "out of paper");
     CHECK_EQ(PR.bitmaps, 1);
     /* busy is fine before a job: it waits, then prints */
     PR.status_after_print = 0;
@@ -456,6 +456,7 @@ static void t_proto(void) {
 
     CHECK_STR(nk_status_name(0x24), "out_of_paper");
     CHECK(nk_status_error(0x01) && !nk_status_error(0x00) && !nk_status_error(0x20));
+    CHECK(!nk_status_error(0x30) && nk_status_error(0x10) && nk_status_error(0x80) && nk_status_error(0x24));
 }
 
 int main(void) {
