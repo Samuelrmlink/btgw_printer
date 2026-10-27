@@ -125,8 +125,12 @@ the board. The owner has the BTGW agent fixing B5/R11. Until they're on the
 device, a module that needs replacing stays as it is. Ship the change on the
 branch and note here that the board runs the older build.
 
-**On the board now (2026-10-27, after the B5 fix):** printer_hub and nelko_tspl
-from fcf49a7 (no self-retry for Classic; the hub skips Classic auto-connect),
-plus nelko_pl70e installed but not loaded. Getting there took one reboot,
-caused by R11 items 1-2 (recorded in parent-requirements.md R11). The hub runs
-from RAM until the next boot (R11 item 3), so the pool has 2.5 KB free.
+**On the board now (2026-10-27, evening):** printer_hub (fcf49a7 build, runs
+from flash), nelko_tspl (fcf49a7) and nelko_pl70e (a084410: lost-write guard,
+PRINT line queued when the ring drains), all installed from
+`sd:/apps/printer/pex/`. The app starts the hub and loads one driver on
+demand. The hub's JOB_END check (a084410) is not on the board: replacing the
+hub needs a reboot while it would run from RAM (R11 item 3).
+Reboots today, each forced by a firmware bug: one for R11 items 1-2 (driver
+install size, reservations), one for R11 item 3 (hub running from RAM left
+336 B of pool).

@@ -430,3 +430,5 @@ Needed:
 Our side: nelko_pl70e treats writes still in flight with no write event for 6 s as done (`WRITE_LOST_MS`), and reports `inflight` and `writes_lost` in its status.
 
 **Done when:** a module can tell that an event was dropped, and a burst of notifications can't push out a write completion.
+
+**Seen on hardware (2026-10-27):** after the driver guard went in, the next 3x1 job to the PL70e-BT printed and the driver reported `"writes_lost":1`: one write completion never reached the module during a 15.6 KB job.
