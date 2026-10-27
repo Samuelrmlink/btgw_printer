@@ -65,6 +65,7 @@ static prn_job_t s_job;
 static uint8_t s_tx[TX_CAP];
 static uint32_t s_tx_head, s_tx_tail;     /* ring, head = write, tail = read */
 static uint8_t s_tail_queued;
+static uint8_t s_tail_due;         /* JOB_END came while the ring was full: queue the tail when it drains */
 static uint32_t s_rows_in, s_sent_total, s_job_bytes;
 static uint32_t s_wait_t0;
 static uint32_t s_pad_left;       /* white bitmap bytes still owed after a cancel */
@@ -112,6 +113,7 @@ static void finish_job(int outcome, const char *msg) {
     s_job_st = JOB_NONE;
     if (!s_pad_left && !s_pad_crlf) { s_tx_head = s_tx_tail = 0; }
     s_tail_queued = 0;
+    s_tail_due = 0;
     prn_hub_job_done(&s_hub, id, outcome, msg);
 }
 
@@ -242,7 +244,13 @@ static void start_connect(void) {
     emit_state("connecting", NULL);
 }
 
+static int queue_tail(void);
+
 static void tick_job(uint32_t now) {
+    if (s_job_st == JOB_SEND && s_tail_due && queue_tail() < 0) {
+        finish_job(PRN_JOB_FAILED, "could not build the PRINT line");
+        return;
+    }
     if (s_inflight > 0 && now - s_write_ev_at > WRITE_LOST_MS) {
         s_writes_lost += (uint32_t)s_inflight;
         pex_log(PEX_LOG_WARN, "pl70e: %d write event(s) never came; carrying on", s_inflight);
@@ -481,6 +489,7 @@ static int drv_job_begin(const prn_job_t *j) {
     tx_put(head, (uint32_t)n);
     s_rows_in = 0;
     s_tail_queued = 0;
+    s_tail_due = 0;
     s_sent_total = 0;
     s_job_bytes = (uint32_t)n + j->row_bytes * j->rows_total;
     s_job_st = JOB_SEND;
@@ -502,17 +511,31 @@ static int drv_job_feed(const uint8_t *rows, uint32_t len) {
     return (int)take;
 }
 
-static int drv_job_end(void) {
-    if (s_job_st != JOB_SEND) { return PEX_ESTATE; }
-    if (s_rows_in != s_job.rows_total) { return PEX_ESTATE; }
+/* The PRINT line after the bitmap. 1 = queued, 0 = no room yet. */
+static int queue_tail(void) {
     tspl_job_t t;
     make_tspl(&t, &s_job);
     char tail[48];
     int n = tspl_tail(tail, sizeof tail, &t);
-    if (n < 0 || (uint32_t)n > tx_room()) { return PEX_EBUSY; }
+    if (n < 0) { return -1; }
+    if ((uint32_t)n > tx_room()) { return 0; }
     tx_put(tail, (uint32_t)n);
     s_job_bytes += (uint32_t)n;
     s_tail_queued = 1;
+    s_tail_due = 0;
+    return 1;
+}
+
+/* The contract has no "busy" for JOB_END and the hub calls it once, so a
+ * tail that doesn't fit the ring yet is queued by tick_job as it drains
+ * (on the bench the 512-byte ring was still full of rows at JOB_END, the
+ * PRINT line was never sent and the job sat at sent == total). */
+static int drv_job_end(void) {
+    if (s_job_st != JOB_SEND) { return PEX_ESTATE; }
+    if (s_rows_in != s_job.rows_total) { return PEX_ESTATE; }
+    int rc = queue_tail();
+    if (rc < 0) { return PEX_EINVAL; }
+    if (rc == 0) { s_tail_due = 1; }
     return PEX_OK;
 }
 

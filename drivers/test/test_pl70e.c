@@ -126,9 +126,11 @@ static void sim_write(fh_ble_peer_t *p, int chr, const uint8_t *d, size_t n, int
     for (size_t i = 0; i < n; i++) { sim_byte(d[i]); }
 }
 
+static uint32_t s_op_ms;       /* 0 = the fake host's default */
 static fh_ble_peer_t *add_printer(int pipe_18f0, uint16_t mtu) {
     fh_ble_peer_cfg_t c;
     memset(&c, 0, sizeof c);
+    c.op_ms = s_op_ms;
     c.addr = ADDR;
     c.name = "PL70e-BT_6CC5-LE";
     c.rssi = -60;
@@ -472,6 +474,45 @@ static void t_print_through_real_hub(void) {
     free(page);
 }
 
+/* Through the hub on a slow link, as on the bench: the hub feeds rows until
+ * the driver's 512-byte ring is full and then calls JOB_END once. The PRINT
+ * line has to go out even when it doesn't fit the ring at that moment (the
+ * bench job stopped at sent == total with no PRINT, so nothing printed).
+ * Several row widths, so the room left at JOB_END varies. */
+static void t_job_end_with_full_ring(void) {
+    for (int wb = 70; wb <= 80; wb++) {
+        fh_reset();
+        free(S.page);
+        free(S.bmp);
+        memset(&S, 0, sizeof S);
+        s_op_ms = 60;
+        load_hub();
+        add_printer(1, 185);
+        s_drv = fh_module("nelko_pl70e", pl70e__pex_main);
+        fh_export(s_drv, PRN_DRV_SYM, (void *)pl70e__prn_drv);
+        fh_load(s_drv);
+        fh_start(s_drv, "{}");
+        fh_run(50);
+        char R[2048];
+        CHECK(fh_op("printer.connect", "{\"driver\":\"nelko_pl70e\",\"addr\":\"" ADDR "\"}", R, sizeof R) > 0);
+        CHECK(wait_ev("printer.state", "\"connected\"", NULL, 20000));
+        int h = 203;
+        uint8_t *page = make_page(wb, h);
+        fh_fs_put("lfs:/printer/var/job.bin", page, (size_t)wb * h);
+        char q[600];
+        snprintf(q, sizeof q, "{\"driver\":\"nelko_pl70e\",\"addr\":\"" ADDR "\",\"model\":\"pl70e\","
+                 "\"path\":\"printer/var/job.bin\",\"width_dots\":%d,\"rows\":%d,\"origin\":[0,0],"
+                 "\"media\":{\"w_mm\":76.2,\"h_mm\":25.4,\"gap_mm\":3,\"type\":\"gap\"},"
+                 "\"density\":8,\"speed\":-1,\"copies\":1,\"rotate\":0,\"options\":{}}", wb * 8, h);
+        CHECK(fh_op("printer.print", q, R, sizeof R) > 0);
+        CHECK(wait_ev("printer.job", "\"done\"", NULL, 120000));
+        CHECK_EQ(S.prints, 1);
+        CHECK(S.page && S.page_n == (size_t)wb * h && !memcmp(S.page, page, S.page_n));
+        free(page);
+    }
+    s_op_ms = 0;
+}
+
 int main(void) {
     RUN(t_proto);
     RUN(t_info);
@@ -487,5 +528,6 @@ int main(void) {
     RUN(t_lost_write_event);
     RUN(t_stop_releases);
     RUN(t_print_through_real_hub);
+    RUN(t_job_end_with_full_ring);
     T_DONE();
 }

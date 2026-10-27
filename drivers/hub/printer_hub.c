@@ -325,8 +325,15 @@ static void step_job(void) {
     for (int guard = 0; guard < 64 && J.st == J_FEED && !J.pending; guard++) {
         if (J.buf_off >= J.buf_len) {
             if (read_next()) { continue; }
-            dcall(J.d, PRN_DRV_JOB_END, J.job.copy, 0, 0);
+            int erc = dcall(J.d, PRN_DRV_JOB_END, J.job.copy, 0, 0);
             if (J.st != J_FEED) { return; }
+            if (erc < 0) {
+                /* the contract has no retry for JOB_END: a refusal ends the job */
+                char m[48];
+                pex_snprintf(m, sizeof m, "driver refused the end of the job (%d)", erc);
+                job_end(PRN_JOB_FAILED, m);
+                return;
+            }
             if (J.native || J.job.copy + 1u >= J.job.copies) {
                 J.st = J_WAIT;
                 J.t_wait = now;
