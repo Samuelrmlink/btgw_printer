@@ -100,7 +100,7 @@ test('a print the hub refuses ends with its error, for Print and for Test print'
   await expect(page.locator('#status')).toHaveText('print failed: out of PEX pool memory: open failed');
   await expect(page.locator('#job-bar')).toBeHidden();
   await refuse();
-  await page.keyboard.press('Shift+C');
+  await page.click('#calibrate');   // (this test is about the error, not the key)
   await expect(page.locator('#cal')).toBeVisible();
   await page.click('#cal-test');
   await expect(page.locator('#status')).toHaveText('test print failed: out of PEX pool memory: open failed');
