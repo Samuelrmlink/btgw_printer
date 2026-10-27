@@ -28,6 +28,11 @@ models through a model table.
 | Nelko | PL70e-BT | BLE | `nelko_pl70e` | tested in simulation (mcusim) |
 | Phomemo | D30 | Bluetooth Classic SPP | `phomemo_d30` | tested in simulation (mcusim) |
 
+## Roadmap
+
+What's next is [docs/roadmap.md](docs/roadmap.md). What we need from the parent is
+[docs/parent-requirements.md](docs/parent-requirements.md).
+
 ## Branches
 
 - `feature/*`: unvetted work.
