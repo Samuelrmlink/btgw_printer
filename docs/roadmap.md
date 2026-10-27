@@ -94,6 +94,7 @@ These are part of the design. They are not tasks.
   - Why: On 2026-10-27 the PL70e stopped answering READSTA after its roll was reloaded. A 3 × 1 job went out in full and never printed; the hub kept it "printing" until the app gave up after 60 s.
   - Needs: during a job, READSTA (or the model's status query) with no answer for a set time ends the job as failed with "the printer isn't answering", and the status shows that. Use the Nelko app's own timeouts and states (docs/protocols/nelko-states.md). Find out with the owner what the printer needs after a paper load.
   - Done when: a fakehost test where the printer never answers ends the job failed within the timeout, and the same on the bench with the printer silenced.
+  - Done so far: 442b039 (a silent printer fails the job in 30 s; a quiet one refuses a new job; status shows unanswered/quiet_ms/writes_failed) and ca06db1 (failed writes are seen at last and resync the printer; a fresh ready answer before every job, as the Nelko app does; SET GAP ON; `recover` connect option). Left: the bench check, and finding the cause with the plan in docs/protocols/nelko-states.md §6.
 
 - [ ] **F7 — Menus: a traditional menu bar on desktop, a collapsible menu sheet on touch**
   - Area: web.
