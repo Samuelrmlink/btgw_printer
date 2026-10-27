@@ -125,7 +125,8 @@ the board. The owner has the BTGW agent fixing B5/R11. Until they're on the
 device, a module that needs replacing stays as it is. Ship the change on the
 branch and note here that the board runs the older build.
 
-**On the board now (2026-10-27):** printer_hub and nelko_tspl installed from
-`sd:/apps/printer/pex/`, the nelko_tspl build with the two-attempt limit
-(101cf16). Not yet on the board: fcf49a7 (no self-retry for Classic, hub skips
-Classic auto-connect), waiting for the B5/R11 fix.
+**On the board now (2026-10-27, after the B5 fix):** printer_hub and nelko_tspl
+from fcf49a7 (no self-retry for Classic; the hub skips Classic auto-connect),
+plus nelko_pl70e installed but not loaded. Getting there took one reboot,
+caused by R11 items 1-2 (recorded in parent-requirements.md R11). The hub runs
+from RAM until the next boot (R11 item 3), so the pool has 2.5 KB free.

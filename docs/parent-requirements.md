@@ -352,6 +352,11 @@ modules only fit with a reboot and a fixed install order. What we measured:
 printer_hub plus one driver can be installed from the card and started
 without a reboot, in either order.
 
+**Re-measured 2026-10-27, after the B5 fix was on the device:** `pex.uninstall` now works on a full pool (B5 is fixed). Items 1 and 2 still stand:
+- With printer_hub (RW 7,184) and nelko_tspl running, `rw_area` 33,264 B, pool `free` 12,200. Stop, unload and uninstall of nelko_tspl all succeeded; after that the pool had 12,504 free and `rw_area` was still 33,264 (item 2). The new 14,868 B nelko_tspl could not be installed from the card (item 1), so the board was left with no Classic driver.
+- **One reboot was necessary because of this** (owner allows a reboot only when necessary, and each one points at a firmware bug): uninstall printer_hub, reboot (`rw_area` 26,080, pool 19,984), install nelko_tspl, install printer_hub, load and start both. Afterwards printer_hub runs from RAM (`xip:false`, item 3) and the pool has 2,504 B free, so a second driver can't load until the next boot.
+- Odd: nelko_pl70e, installed after boot, reported `xip_ready:true` while `rw_area` stayed at 26,080 / 33,264 (its 1,284 B RW not counted). Worth checking that its RW address is really reserved.
+
 ### R12 (Must for companion mode): installable apps — files on the card, registered with the parent UI (2026-10-27)
 
 **The problem.** In companion mode there is no supported way to reach our app from the BTGW UI, or to add an app to a board without replacing the parent's files:
