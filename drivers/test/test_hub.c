@@ -2,6 +2,7 @@
  * all-black punch, card files, cancel, unload. */
 #include "t.h"
 #include "drv.h"
+#include "fh_classic.h"
 #include "core/prn_core.h"
 
 static char R[3000];
@@ -200,15 +201,30 @@ static void t_unload_driver_mid_job(void) {
     CHECK_HAS(R, "printer_virtual");
 }
 
+/* Saved printers come back at boot, except Bluetooth Classic ones: those
+ * wait for the user (paging one that is off stalls the gateway's Wi-Fi,
+ * parent-requirements B4). */
 static void t_autoconnect(void) {
     fh_reset();
+    fh_cl_peer_cfg_t pc = { .addr = "31:9D:68:1F:38:A4", .name = "PM220", .cod = 0x040680, .rssi = -50,
+                            .sdp_channel = 1 };
+    fh_cl_peer_t *pm = fh_cl_peer_add(&pc);
     const char *cfg = "{\"version\":1,\"printers\":[{\"addr\":\"00:00:00:00:5E:01\",\"driver\":\"printer_virtual\","
                       "\"model\":\"virtual\",\"auto_reconnect\":true},{\"addr\":\"11:11:11:11:11:11\","
-                      "\"driver\":\"other\"}]}";
+                      "\"driver\":\"other\"},{\"addr\":\"31:9D:68:1F:38:A4\",\"driver\":\"nelko_tspl\","
+                      "\"model\":\"pm220\",\"auto_reconnect\":true}]}";
     fh_fs_put("lfs:/printer/printers.json", cfg, strlen(cfg));
     load_hub();
     load_virtual();
-    CHECK(wait_ev("printer.state", "\"connected\"", NULL, 200));
+    load_nelko();
+    CHECK(wait_ev("printer.state", "\"connected\"", "00:00:00:00:5E:01", 200));
+    fh_run(10000);
+    CHECK(fh_log_has("auto-connect nelko_tspl 31:9D:68:1F:38:A4 skipped"));
+    CHECK_EQ(fh_cl_peer_stats(pm)->pages, 0);
+    for (int i = 0; i < fh_events("printer.state"); i++) {
+        const char *e = fh_event("printer.state", i);
+        CHECK(!(strstr(e, "31:9D:68:1F:38:A4") && strstr(e, "connecting")));
+    }
 }
 
 static void t_helpers(void) {

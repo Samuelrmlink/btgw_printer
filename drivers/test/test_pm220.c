@@ -233,39 +233,35 @@ static void t_wrong_pins_give_up(void) {
     setup("9999", 0);
     CHECK(!connect_pm220(NULL));
     CHECK(wait_ev("printer.state", "pairing failed", NULL, 200));
-    /* three rounds (each tries both PINs), then it stops */
+    /* one connect tries each PIN once, then it stops */
     fh_run(200000);
-    CHECK_EQ(fh_cl_peer_stats(S.p)->pin_requests, 6);
+    CHECK_EQ(fh_cl_peer_stats(S.p)->pin_requests, 2);
     CHECK_HAS(fh_event_last("printer.state"), "\"idle\"");
 }
 
-/* A lost link is retried after 8 s, then 16 s. Two attempts that find no
- * printer stop the retries: paging a printer that is off stalls the
- * gateway's Wi-Fi (parent-requirements B4). A connect op starts over. */
-static void t_reconnect_backoff(void) {
+/* No reconnect of its own: paging a printer that is off stalls the gateway's
+ * Wi-Fi (parent-requirements B4). A lost link and an unreachable printer both
+ * wait for the user's next connect. */
+static void t_no_reconnect(void) {
     setup("0000", 0);
     CHECK(connect_pm220(NULL));
     fh_cl_peer_absent(S.p, 1);
     fh_cl_peer_close(S.p);
-    CHECK(wait_ev("printer.state", "\"waiting\"", "link lost", 100));
-    CHECK_HAS(fh_event_last("printer.state"), "\"retry_ms\":8000");
-    int pages = fh_cl_peer_stats(S.p)->pages;
-    fh_run(7900);
-    CHECK_EQ(fh_cl_peer_stats(S.p)->pages, pages);
-    CHECK(wait_ev("printer.state", "not reachable", NULL, 200));
-    fh_run(15000);
-    CHECK(fh_log_has("retry in 16000 ms"));
-    CHECK(wait_ev("printer.state", "stopped retrying", NULL, 20000));
-    CHECK_HAS(fh_event_last("printer.state"), "\"idle\"");
-    CHECK(fh_log_has("not reachable 2 times, stopped retrying"));
+    CHECK(wait_ev("printer.state", "\"idle\"", "link lost", 100));
     int quiet = fh_events("printer.state");
     fh_run(180000);
-    CHECK_EQ(fh_events("printer.state"), quiet);    /* no more attempts */
-    /* the user asks again, with the printer back on */
-    fh_cl_peer_absent(S.p, 0);
-    int st = fh_events("printer.state");
+    CHECK_EQ(fh_events("printer.state"), quiet);    /* nothing pages on its own */
+    /* the user connects while it is still off: one attempt, then it waits */
     CHECK(fh_op("printer.connect", "{\"driver\":\"nelko_tspl\",\"addr\":\"" ADDR "\"}", R, sizeof R) > 0);
-    CHECK(wait_ev_after(st, "printer.state", "\"connected\"", NULL, 5000));
+    CHECK(wait_ev_after(quiet, "printer.state", "not reachable (is it on?)", NULL, 20000));
+    CHECK_HAS(fh_event_last("printer.state"), "\"idle\"");
+    quiet = fh_events("printer.state");
+    fh_run(180000);
+    CHECK_EQ(fh_events("printer.state"), quiet);
+    /* switched on, the next connect works */
+    fh_cl_peer_absent(S.p, 0);
+    CHECK(fh_op("printer.connect", "{\"driver\":\"nelko_tspl\",\"addr\":\"" ADDR "\"}", R, sizeof R) > 0);
+    CHECK(wait_ev_after(quiet, "printer.state", "\"connected\"", NULL, 5000));
 }
 
 /* the golden print: the whole new path against the old firmware */
@@ -411,10 +407,11 @@ static void t_link_lost_mid_job(void) {
     fh_run(300);
     fh_cl_peer_close(S.p);
     CHECK(wait_ev("printer.job", "\"failed\"", "link lost", 200));
-    CHECK(wait_ev("printer.state", "\"waiting\"", NULL, 100));
+    CHECK(wait_ev("printer.state", "\"idle\"", "link lost", 100));
     CHECK_EQ(fh_fs_open_count(), 0);
-    /* it comes back by itself after 8 s and prints again */
+    /* the user connects again and prints again */
     int st = fh_events("printer.state");
+    CHECK(fh_op("printer.connect", "{\"driver\":\"nelko_tspl\",\"addr\":\"" ADDR "\"}", R, sizeof R) > 0);
     CHECK(wait_ev_after(st, "printer.state", "\"connected\"", NULL, 9000));
     fh_run(2000);
     if (getenv("DBG")) { fh_verbose(1); }
@@ -590,7 +587,7 @@ int main(void) {
     RUN(t_remembered_pin_first);
     RUN(t_stale_key);
     RUN(t_wrong_pins_give_up);
-    RUN(t_reconnect_backoff);
+    RUN(t_no_reconnect);
     RUN(t_golden_print);
     RUN(t_copies_and_settings);
     RUN(t_stream_under_backpressure);

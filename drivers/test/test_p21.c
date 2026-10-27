@@ -359,10 +359,12 @@ static void t_link_loss(void) {
     CHECK_EQ(HS.done_outcome, PRN_JOB_FAILED);
     CHECK_STR(HS.done_msg, "link lost");
     int pages = fh_cl_peer_stats(s_peer)->pages;
-    /* reconnects on its own after the backoff */
-    fh_run(9000);
-    CHECK(fh_cl_peer_stats(s_peer)->pages > pages);
-    CHECK(hs_state_is("connected"));
+    /* no reconnect of its own: paging a printer that is off stalls the
+     * gateway's Wi-Fi (parent-requirements B4); the user connects again */
+    fh_run(60000);
+    CHECK_EQ(fh_cl_peer_stats(s_peer)->pages, pages);
+    CHECK(hs_state_is("idle"));
+    connect_ok();
 }
 
 static void t_disconnect_stop(void) {

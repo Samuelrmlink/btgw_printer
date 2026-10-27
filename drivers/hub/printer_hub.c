@@ -19,6 +19,7 @@
 typedef struct {
     char id[24];
     int8_t black_bit, dmin, dmax, ddef, smin, smax, sdef, has_speed, copies;
+    int8_t classic;          /* transport "classic": never connected without the user */
 } model_t;
 
 typedef struct {
@@ -100,6 +101,9 @@ static void cache_models(drv_t *d) {
         memset(m, 0, sizeof *m);
         pex_snprintf(p, sizeof p, "models.%d.id", i);
         if (!pex_json_str(s_scratch, p, m->id, sizeof m->id)) { continue; }
+        char tr[16];
+        pex_snprintf(p, sizeof p, "models.%d.transport", i);
+        m->classic = (int8_t)(pex_json_str(s_scratch, p, tr, sizeof tr) && strcmp(tr, "classic") == 0);
         pex_snprintf(p, sizeof p, "models.%d.black_bit", i);
         m->black_bit = (int8_t)jint(s_scratch, p, 0);
         pex_snprintf(p, sizeof p, "models.%d.density.min", i);
@@ -127,7 +131,10 @@ static model_t *model_of(drv_t *d, const char *id) {
     return NULL;
 }
 
-/* Printers saved with auto_reconnect come back when their driver registers. */
+/* Printers saved with auto_reconnect come back when their driver registers,
+ * except Bluetooth Classic ones: paging a Classic printer that is switched off
+ * stalls the gateway's Wi-Fi for about half a minute (parent-requirements B4),
+ * so those wait for the user to press Connect in the web app. */
 static int autoconnect(void *arg) {
     drv_t *d = arg;
     if (!drv_live(d)) { return PEX_TASK_DONE; }
@@ -152,6 +159,14 @@ static int autoconnect(void *arg) {
         pex_json_bool(s_cfg, p, &on);
         pex_snprintf(p, sizeof p, "printers.%d.addr", i);
         if (!on || !pex_json_str(s_cfg, p, addr, sizeof addr)) { continue; }
+        char mid[24] = "";
+        pex_snprintf(p, sizeof p, "printers.%d.model", i);
+        pex_json_str(s_cfg, p, mid, sizeof mid);
+        const model_t *mm = model_of(d, mid);
+        if (!mm || mm->classic) {
+            pex_log(PEX_LOG_INFO, "auto-connect %s %s skipped: Classic, waits for the user", d->name, addr);
+            continue;
+        }
         pex_snprintf(p, sizeof p, "printers.%d", i);
         size_t len = 0;
         const char *obj = pex_json_find(s_cfg, p, &len);

@@ -15,7 +15,10 @@
  *     legacy PIN answered from the model's list (a PIN that worked before
  *     first) through PEX_CL_PIN, so the firmware's one drop-key retry tries
  *     the next PIN, not the same one again; SSP just-works;
- *   - reconnect: 8 s, doubling to 60 s, while the user wants the printer;
+ *   - no reconnect of its own: a connect op is one attempt (the PIN walk and
+ *     a busy radio aside). Paging a printer that is switched off stalls the
+ *     gateway's Wi-Fi for about half a minute (parent-requirements B4), so a
+ *     lost link or an unreachable printer waits for the user's next connect;
  *   - status: CONFIG?, BATTERY? (every 25 s when idle), ESC !? before a job,
  *     ESC !o's 16-byte status (it leads every job, as the old firmware did);
  *   - jobs: TSPL from proto/tspl, the rows streamed as the TX buffer frees.
@@ -58,11 +61,6 @@ PEX_WEAK_IMPORT(pex_bt_classic_forget);
 #define NAME_WATCH_MS 20000u
 #define BACKOFF_FIRST_MS 8000u
 #define BACKOFF_MAX_MS 60000u
-/* Attempts in a row that find no printer (paging timeout) before the driver
- * stops retrying. While the radio pages a printer that is off, the gateway's
- * Wi-Fi stalls for tens of seconds (parent-requirements B4), so a switched-off
- * printer must not be paged forever. A connect op starts over. */
-#define UNREACHABLE_MAX 2
 #define DEVS 16
 #define PINS 4
 #define COD_MAJOR(c) (((c) >> 8) & 0x1Fu)
@@ -115,7 +113,7 @@ static char s_self[32] = DRIVER;
 
 /* the link */
 static const model_t *s_model = &MODELS[0];
-static int s_link, s_handle, s_want, s_auth_fails, s_backoff_n, s_unreach;
+static int s_link, s_handle, s_want, s_backoff_n;
 static uint8_t s_addr[6];
 static char s_addr_s[18];
 static uint8_t s_channel;
@@ -418,8 +416,6 @@ static void on_cl(void *arg, const pex_cl_event_t *ev) {
         pex_cl_info_t in;
         s_link = L_OPEN;
         s_backoff_n = 0;
-        s_auth_fails = 0;
-        s_unreach = 0;
         if (s_pin_i > 0) { s_pin_next = s_pin_i - 1; }   /* this PIN works: first next time */
         if (pex_bt_classic_state(ev->handle, &in) == PEX_OK) { s_channel = in.channel; }
         s_room_max = 0;
@@ -456,32 +452,24 @@ static void on_cl(void *arg, const pex_cl_event_t *ev) {
             break;
         }
         int pinned = s_link == L_OPENING && s_pin_used[0];
+        int again = 0;
         if (pinned) {
-            /* a PIN was answered and the attempt failed: the next one tries
-             * the next PIN, at once rather than after the backoff */
+            /* a PIN was answered and the attempt failed: the same attempt
+             * goes on with the next PIN, once through the list */
             s_pin_next = s_pin_i;
-            if (s_pin_next >= s_npins) {
+            if (s_pin_next < s_npins) {
+                again = 1;
+            } else {
                 s_pin_next = 0;
-                if (++s_auth_fails >= 3) {
-                    s_want = 0;       /* three rounds of every PIN: stop asking */
-                    pex_log(PEX_LOG_WARN, "%s: pairing failed with every PIN", s_model->id);
-                }
+                pex_log(PEX_LOG_WARN, "%s: pairing failed with every PIN", s_model->id);
             }
-        } else if (ev->why == 3 && ++s_auth_fails >= 3) {
-            s_want = 0;
-            pex_log(PEX_LOG_WARN, "%s: pairing failed with every PIN", s_model->id);
         }
-        if (ev->kind == PEX_CL_FAILED && (ev->why == 1 || ev->why == 7)) {
-            if (++s_unreach >= UNREACHABLE_MAX && s_want) {
-                s_want = 0;
-                w = "not reachable; stopped retrying (is it on?)";
-                pex_log(PEX_LOG_WARN, "%s: not reachable %d times, stopped retrying", s_model->id, s_unreach);
-            }
-        } else if (ev->why != 9) {
-            s_unreach = 0;
+        if (!again) {
+            s_want = 0;        /* the user connects again; nothing pages on its own */
+            if (ev->why == 1 || ev->why == 7) { w = "not reachable (is it on?)"; }
         }
         schedule_retry(w);
-        if (pinned && s_want && s_pin_next != 0) {
+        if (again) {
             s_backoff_n = 0;
             s_t_retry = pex_ms() + 500u;
         }
@@ -857,8 +845,6 @@ static int connect_(const char *addr, const char *cfg) {
     s_ready = -1;
     s_want = 1;
     s_backoff_n = 0;
-    s_auth_fails = 0;
-    s_unreach = 0;
     if (s_scanning) { pex_bt_classic_scan_stop(); s_scanning = S_OFF; }
     int rc = open_link();
     if (rc == PEX_EBUSY) {           /* the radio is paging or scanning: try shortly */
