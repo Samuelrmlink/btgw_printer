@@ -329,12 +329,24 @@ after each:
    app, so unproven on this firmware).
 5. Power cycle.
 
-Then reproduce it on purpose, so the cause is known rather than guessed:
-with the printer healthy, send a BITMAP header and only part of its data
-(`tools/pl70e_q.sh 3.1` writes raw bytes), then READSTA. If it goes silent,
-the theory holds; then step 3 should bring it back without a power cycle.
-Repeat once with a paper reload instead of a cut job, to see whether the
-reload alone does it.
+Then reproduce it on purpose, so the cause is known rather than guessed.
+With the printer healthy and nelko_pl70e disconnected (`printer.disconnect`;
+the tool connects through the gateway's own GATT ops, write characteristic
+`3.1`, notify `3.0` as in docs/notes/nelko-pl70e.md), a 10 × 10-byte BITMAP
+(100 image bytes) sent short by 80, with no PRINT, so nothing prints:
+
+```sh
+tools/pl70e_q.sh 3.1 'READSTA \r\n'                      # expect READSTA PAPER,
+tools/pl70e_q.sh 3.1 'CLS\r\nBITMAP 0,0,10,10,0,'"$(printf '\\xff%.0s' $(seq 20))"
+tools/pl70e_q.sh 3.1 'READSTA \r\n'                      # silent? (READSTA is 10 of the 80 bytes it waits for)
+tools/pl70e_q.sh 3.1 "$(printf '\\xff%.0s' $(seq 80))"'\r\n'   # the rest, as white
+tools/pl70e_q.sh 3.1 'READSTA \r\n'                      # answers again?
+```
+
+If it goes silent after the short BITMAP and answers after the filler, the
+theory holds, and `"recover":"resync"` (step 3) is the general cure. Then
+repeat with a paper reload (open the lid, take the roll out, put it back)
+and no job, to see whether a reload alone silences it.
 
 Worth a separate test: **Classic SPP to the PL70e**, the path the vendor
 uses (bonded, RFCOMM). It failed on 2026-10-26 ("security level not met",
