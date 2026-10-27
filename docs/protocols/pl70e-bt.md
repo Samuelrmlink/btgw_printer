@@ -21,7 +21,7 @@ Sources:
 | BR/EDR address | DC:0D:30:89:6C:C5 (DIS serial string `DC0D30896CC5`) | live |
 | Advertising | flags 06, 16-bit UUID 0x18F0, 128-bit UUID e7810a71-73ae-499d-8c15-faa9aef0c3f2, name in the scan response | live |
 | DIS (0x180A) | model `FSC-BT986`, manufacturer `Feasycom`, firmware `9.8.6,20260701,22789,233`, hardware `1.3` | live |
-| MTU | 185 negotiated with the gateway (the app asks for 512) | live, apk |
+| MTU | 185 negotiated with the gateway (the Android app doesn't use BLE for this printer) | live, apk |
 
 Match a printer by an LE name prefix of `PL70e-BT`, or by service 0x18F0
 plus a name starting `PL70e`.
@@ -42,7 +42,7 @@ Orbsa's unit (firmware v3.0.1.407) also exposes `fec7`/`fec8` and returns the
 1-byte `ESC !?` status on `fec8`. The bench unit has no `fec7`.
 
 - **Chunking:** writes of up to MTU−3 bytes (182). Orbsa writes 180-byte chunks with response.
-- **Pacing:** the app's BLE writer uses a 512-byte pack length with a small fixed delay [apk].
+- **Pacing:** the Android app never uses BLE for this printer: it prints over Classic SPP in 1024-byte chunks with 3 ms between them [apk]. Its 512-byte BLE packs and MTU 512 belong to other models.
 - **Flow control:** none at the GATT level. Pacing comes only from write-with-response, or from the link's write queue.
 
 ## Status
@@ -55,8 +55,11 @@ Orbsa's unit (firmware v3.0.1.407) also exposes `fec7`/`fec8` and returns the
 | | `READSTA OVERHEAT,\r\n` | apk |
 | `ESC ! ?` (`1b 21 3f`) | one byte: 0x00 idle, 0x04 paper out (0x02 rides with it), 0x20 printing | orbsa |
 
-`BATTERY?`, `CONFIG?`, `~!T` and `~!I` got no reply [live]. The app's only
-PL70e status call is READSTA, with a 500 ms timeout and up to 3 tries [apk].
+`BATTERY?`, `CONFIG?`, `~!T` and `~!I` got no reply [live]. The app's
+PL70e status call is READSTA, sent once with a 1.5 s timeout (no retries),
+before a job and between the pages of a multi-page job; never while a
+single label prints [apk]. Its self-test check uses `ESC ! ?`. The full
+state map, sequences and recovery notes: [nelko-states.md](nelko-states.md).
 
 ## Print job
 
@@ -72,7 +75,7 @@ BITMAP x,y,wbytes,h,mode,<wbytes*h bytes>\r\n
 PRINT 1,<copies>\r\n            "normal" builder: PRINT <copies>
 ```
 
-- **"OEM" builder:** also sends `SET CUTTER 1` before `CLS`, and `SET GAP OFF` for continuous media.
+- **"OEM" builder:** also sends `SET GAP ON` (gap media) or `SET GAP OFF` (continuous) and `SET CUTTER 1` before `CLS`; BITMAP mode 0, threshold 190. nelko_pl70e sends `SET GAP ON/OFF` since ca06db1.
 - **SPEED:** orbsa sends `SPEED 4`. The app does not set speed for the PL70e.
 - **Bitmap:**
   - 1 bit per dot, MSB first, each row `wbytes` long.

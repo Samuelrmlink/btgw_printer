@@ -18,7 +18,8 @@ Every outside source used for a printer protocol, with its license and how we us
 | [theacodes/phomemo_m02s](https://github.com/theacodes/phomemo_m02s) | MIT | M02S (via D30) | raster packing | facts |
 | [crabdancing/phomemo-d30](https://github.com/crabdancing/phomemo-d30) | AGPL-3.0 | D30 | cross-check of the preamble bytes | facts only |
 | [vivier/phomemo-tools](https://github.com/vivier/phomemo-tools) | GPL-3.0 | D30 | `rastertopd30.py`: job framing, inversion, rotation | facts only |
-| Nelko Android app (`~/Downloads/Nelko_apk.zip`) | proprietary | P21, PM220, PL70e-BT | device name table, the P21 being found by BLE name, Jieli service set, MTU; PL70e TSPL job layout, READSTA status strings, bit polarity, model data (dpi, widths, gaps) | facts only |
+| Nelko Android app (`~/Downloads/Nelko_apk.zip`) | proprietary | P21, PM220, PL70e-BT | device name table, the P21 being found by BLE name, Jieli service set, MTU; PL70e TSPL job layout, READSTA status strings, bit polarity, model data (dpi, widths, gaps); status code tables, query timing, job/cancel sequences, settings and OTA commands ([nelko-states.md](protocols/nelko-states.md)) | facts only |
+| Nelko troubleshooting list (`app.nelko.net/api/qa/getTroubleRemovalList`, fetched once 2026-10-27) | vendor web data | – | checked for PL70e LED/error entries: none | facts only |
 | Phomemo Android app (`~/Downloads/Phomemo_apk.zip`) | proprietary | D30 | D30 name prefixes, SPP transport for that class, BLE credit scheme of other models | facts only |
 | [Orbsa/Nelko-PL70e-CUPS](https://github.com/Orbsa/Nelko-PL70e-CUPS) | MIT | PL70e-BT | GATT write characteristics, `ESC !?` status byte meanings, 180-byte chunking | adapted (THIRD_PARTY.md if code is used) |
 | pm220_rp2_webapp, nelko-pm220 (own) | MIT | PM220 | TSPL job, status queries | ported |
