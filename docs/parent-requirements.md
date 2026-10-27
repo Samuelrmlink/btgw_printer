@@ -320,3 +320,34 @@ This may be the board's state after the re-partition (stale or corrupt blocks) r
 **Done when:** the cause is known; the fix is either a reformat/migration procedure or a code fix.
 
 C10 above (the PIN list restarting after the drop-key retry) is a fourth finding from the same runs.
+
+### R11 (Must): PEX module memory on an image that carries other modules (2026-10-27, bench board)
+
+On the bench board (Anker and Pinecil installed, 48 KB pool) the printer
+modules only fit with a reboot and a fixed install order. What we measured:
+
+1. **`pex.install {path:"sd:/..."}` needs the whole file in one piece of the
+   pool.** nelko_tspl is 14,924 bytes; the pool had 12,800 bytes in one piece,
+   so the install was refused ("the file is 14924 bytes; the PEX pool has
+   12800 in one piece"). The installed copy runs in place, so its code never
+   needs the pool. Needed: stream an SD install into the partition in chunks
+   (a few KB of buffer), so the pool size bounds a module's RW, not its file.
+2. **The RW reservation of every installed module is taken at boot, loaded or
+   not** (`rw_area` 26,080 B for Anker + Pinecil, 33,264 B with printer_hub).
+   With printer_hub installed the pool had 12,800 bytes free with nothing of
+   ours loaded, so a 14.9 KB driver could not be installed. Uninstalling did
+   not give the reservation back until a reboot, and a later install then
+   failed with "PEX pool full (index update)". The working order was:
+   uninstall, reboot, install the driver, install the hub. Needed: reserve RW
+   when a module loads (or give it back on uninstall), and say in
+   `pex.list` how much the next install needs.
+3. **A module installed after boot loads into RAM** (`xip_ready:false`) until
+   the next reboot. That is documented, but together with 1–2 it means a
+   driver update on a full board always takes two reboots.
+4. Autostart needs `cfg/launch.json` on LittleFS, which B3 makes unwritable
+   on this board. Allowing the launch list on the card (`sd:/cfg/launch.json`)
+   would also help boards without working flash.
+
+**Done when:** on the bench board, with Anker and Pinecil installed, a new
+printer_hub plus one driver can be installed from the card and started
+without a reboot, in either order.

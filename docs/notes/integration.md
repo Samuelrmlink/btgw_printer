@@ -86,3 +86,11 @@ A full run takes about 25 minutes of wall time.
 - The simulated PM220 rejects the PIN with HCI 0x05 and the firmware reports why rfcomm. A real PM220 may differ; the driver now copes with both.
 - Parent bugs B1 to B3 and C10: `docs/parent-requirements.md`, section C.
 - Hardware: nothing in this branch has run on the bench.
+
+## Bench, 2026-10-27 (board 10.255.255.23, parent /sd gzip build)
+
+- **PM220 printed** through printer_hub + driver from a PC script (tools/bench_print.py, job file on the card): 384×239 test page on 50×30 labels, job queued → sending → printing → done; RFID roll read as 50×30 gap. Owner confirmed the label.
+- nelko_tspl (PM220 + P21) installed from `sd:/apps/printer-pex/`; connects to the PM220 (31:9D:68:1F:38:A4) first try at security level 0; status battery 80, fw 0.1.39.
+- Scan on hardware: the PM220's name arrived after the 2 s wait, so it was reported with `model:null`. Fixed: 6 s wait plus a 20 s late-name watch that re-reports (model, or `gone:true`).
+- Module memory: installs need the whole file in the pool, and RW reservations are taken at boot. Order that works: uninstall ours, reboot, install the driver, install the hub, load and start hub then driver. Parent R11.
+- Flash writes still fail (B3), so there's no autostart: after each boot, start printer_hub, then the driver, by op.
