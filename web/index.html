@@ -43,6 +43,7 @@
             <button type="button" id="help-btn" aria-label="Keyboard shortcuts">?</button>
             <span id="status">connecting…</span>
             <button type="button" id="status-connect" class="chip" hidden title="Connect the printer">Connect</button>
+            <button type="button" id="status-retry" class="chip" hidden title="Start the printer service again">Retry</button>
         </div>
         <div id="job-bar" class="job-bar" hidden>
             <span id="job-text"></span>
@@ -258,6 +259,10 @@
                     <button type="button" id="pe-save" class="primary" tabindex="-1">Save printer</button>
                     <button type="button" id="pe-cancel" tabindex="-1">Cancel</button>
                 </div>
+            </div>
+            <div class="scan-for" id="printers-scan-for">
+                <label for="printers-family">Scan for</label>
+                <select id="printers-family" title="Which printers to look for: their driver is started first"></select>
             </div>
             <div class="picker-actions" id="printers-actions">
                 <button type="button" id="printers-scan" tabindex="-1">Scan</button>

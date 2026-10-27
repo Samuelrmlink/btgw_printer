@@ -86,3 +86,40 @@ export function askBeforeConnect({ transport, saved, seen = false }) {
 export function lostAgain(why) {
     return /link lost|not reachable|stopped retrying/i.test(String(why || ""));
 }
+
+// ---- the printer service: the PEX modules the app needs ------------------
+// Nothing loads them after a board boot (parent B3: cfg/launch.json can't be
+// written; the parent's launchers don't read app.json's pex list). So the app
+// starts printer_hub itself at boot, and a driver only when a printer of that
+// driver is about to be connected or scanned for (hub.js).
+
+export const HUB_MODULE = "printer_hub";
+export const FALLBACK_DRIVERS = ["nelko_tspl"];
+
+/** app.json (or null) → our driver modules, in the manifest's order. */
+export function serviceDrivers(manifest) {
+    const names = (manifest && Array.isArray(manifest.pex) ? manifest.pex : [])
+        .map((m) => (typeof m === "string" ? m : m && m.name))
+        .filter((n) => typeof n === "string" && /^[A-Za-z0-9_]+$/.test(n) && n !== HUB_MODULE);
+    return names.length ? [...new Set(names)] : [...FALLBACK_DRIVERS];
+}
+
+/** A pex.load / pex.start error that means another client got there first. */
+export function alreadyDone(err) {
+    return /already/i.test(`${(err && err.code) || ""} ${(err && err.message) || ""}`);
+}
+
+/** A pex.load error that means the PEX pool has no room for the module. */
+export function poolFull(err) {
+    return /pex pool|out of pool|pool memory/i.test(`${(err && err.code) || ""} ${(err && err.message) || ""}`);
+}
+
+/** "Nelko PM220 / P21" for a driver, from its models ({driver, vendor, name}). */
+export function familyLabel(driver, models) {
+    const mine = (models || []).filter((m) => m.driver === driver);
+    if (!mine.length) {
+        return driver;
+    }
+    const vendor = mine[0].vendor || "";
+    return `${vendor} ${mine.map((m) => m.name).join(" / ")}`.trim();
+}

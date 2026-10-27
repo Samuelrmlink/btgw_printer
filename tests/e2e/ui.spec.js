@@ -151,7 +151,9 @@ test('without printer_hub the app still designs and says why printing is off', a
   await page.evaluate(async () => fetch('/api/op', { method: 'POST', body: JSON.stringify({ op: 'test.set', params: { hub: false } }) }));
   await reload(page);
   await page.waitForFunction(() => window.btgwPrinter && window.btgwPrinter.state.boardReady);
-  await expect(page.locator('#status')).toContainText('no printer_hub');
+  // the app tries to start it (F11); with printer_hub not on the board that fails and says so
+  await expect(page.locator('#status')).toContainText("printer service didn't start: printer_hub is not installed");
+  await expect(page.locator('#status-retry')).toBeVisible();
   await expect(page.locator('#print')).toBeDisabled();
   await page.click('#add-text');
   expect(await page.evaluate(() => window.btgwPrinter.editor.boxes.length)).toBe(1);

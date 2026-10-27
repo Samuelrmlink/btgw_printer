@@ -1,16 +1,17 @@
 /** BTGW Printer: the label editor (ported from pm220_rp2_webapp's app.js) on
  * bluetooth_rp2_webapp, for any printer a driver module supports. */
 
-import { connect as connectDevice, fs, on, readJsonOr, refreshSd, whenInfo, ws, deviceLabel, sdAvailable } from "./device.js";
+import { connect as connectDevice, fs, hasModule, on, readJsonOr, refreshSd, whenInfo, ws, deviceLabel, sdAvailable } from "./device.js";
 import { Editor, defaultBarcode, defaultImage, defaultQr, defaultText } from "./editor.js";
 import { boxOverflows, rasterize, rotateSwapsAxes } from "./raster.js";
 import { fromDocument, readFileText, toDocument } from "./doc.js";
 import { pageFor } from "./layout.js";
 import {
     calibrationFor, currentPrinterAddr, defaultModel, findMedia, findModel, findPrinter, loadPresets,
-    loadPrinters, loadUserMedia, mediaFor, onCatalog, saveCalibration,
+    isDriverLive, loadPrinters, loadUserMedia, mediaFor, onCatalog, saveCalibration,
 } from "./catalog.js";
 import * as hub from "./hub.js";
+import { serviceDrivers } from "./store.js";
 import { actionFor, helpHtml } from "./keymap.js";
 import { isNumField, parseIntValue, setBounds, stepNumField, wrapNumSpins, bindSpinHolds } from "./numfield.js";
 // Everything else loads on first use, or one module at a time once the page
@@ -1596,6 +1597,9 @@ function refreshPrinterUi() {
     // Print stays on for a saved printer that is down: printing asks to connect it
     $("print").disabled = busy || !p || (!up && !(ws.connected && hub.hubUp()));
     $("status-connect").hidden = !p || !ws.connected || up || !hub.isDown(p);
+    if (!ws.connected || (retryHub && hub.hubUp())) {
+        $("status-retry").hidden = true;
+    }
     if (Date.now() - msgAt < MSG_MS) {
         return;
     }
@@ -1635,7 +1639,8 @@ async function connectCurrent() {
     try {
         return await hub.requestConnect(p);
     } catch (err) {
-        setStatus(`${printerName(p)}: ${err.message || err}`, "err");
+        const what = err.module ? `couldn't start the ${err.module} driver: ` : "";
+        failWithRetry(`${printerName(p)}: ${what}${err.message || err}`, () => connectCurrent());
         return false;
     }
 }
@@ -1684,6 +1689,63 @@ async function readMode() {
     return readJsonOr("printer/mode.json", null).catch(() => null);
 }
 
+// ---- the printer service (roadmap F11) ------------------------------------
+// Nothing loads our PEX modules after a board boot, so the app does: at boot
+// printer_hub (pex.load + pex.start) when printer.drivers is not there; a
+// driver when a printer of it is connected or scanned for (hub.ensureDriver).
+
+let manifest;   // app.json next to the page (deploy writes it), null when there is none
+
+async function loadManifest() {
+    if (manifest === undefined) {
+        try {
+            const r = await fetchRetry("app.json", { cache: "no-store" });
+            manifest = r.ok ? await r.json() : null;
+        } catch {
+            manifest = null;
+        }
+        hub.setOurDrivers(serviceDrivers(manifest));
+    }
+    return manifest;
+}
+
+/** A failure on the status line that stays, with a Retry that runs fn. */
+let retryFn = null;
+let retryHub = false;   // the Retry is for printer_hub: it goes once the hub answers
+function failWithRetry(msg, fn, { hubRetry = false } = {}) {
+    setStatus(msg, "err");
+    msgAt = Date.now() + 3600 * 1000;   // until Retry or a new message
+    retryFn = fn;
+    retryHub = hubRetry;
+    $("status-retry").hidden = false;
+}
+$("status-retry").addEventListener("click", () => {
+    $("status-retry").hidden = true;
+    msgAt = 0;
+    const fn = retryFn;
+    retryFn = null;
+    fn && fn();
+});
+
+/** → true when printer_hub answers (started now if it was not). */
+async function ensureHub() {
+    if (hub.hubUp()) {
+        return true;
+    }
+    msgAt = Date.now() + 60000;   // hold the line while this runs
+    showStatus("starting the printer service…", "");
+    try {
+        await hub.startHub();
+        msgAt = 0;
+        return true;
+    } catch (err) {
+        msgAt = 0;
+        failWithRetry(`printer service didn't start: ${err.message || err}`,
+            () => onBoard().catch((e) => setStatus(String(e.message || e), "err")), { hubRetry: true });
+        return false;
+    }
+}
+
 async function onBoard() {
     await whenInfo();
     await refreshSd().catch(() => false);
@@ -1691,7 +1753,11 @@ async function onBoard() {
     $("mode-switch").hidden = !(mode && mode.mode === "companion");
     await loadUserMedia();   // one settings read at a time (lazy.js: the card's route is narrow)
     await loadPrinters();
+    await loadManifest();
     await hub.refreshDrivers();
+    if (hasModule("pex")) {
+        await ensureHub();   // once per connection: a failure waits for Retry
+    }
     // The selected printer decides the model; a live driver's caps replace the
     // shipped ones (same key, maybe different numbers).
     const p = currentPrinter();
@@ -1704,9 +1770,10 @@ async function onBoard() {
     refreshPrinterUi();
     const first = !state.boardReady;
     state.boardReady = true;
-    if (first && auto === "ask") {
-        // once per page load, after boot: a saved Classic printer is only paged
-        // when the user says it is on (Cancel leaves the status line's Connect)
+    if (auto === "connect" || (first && auto === "ask")) {
+        // a saved Classic printer is asked about once per page load, after
+        // boot: only paged when the user says it is on (Cancel leaves the
+        // status line's Connect); BLE connects on every (re)connect
         connectCurrent().finally(() => {
             if (first) {
                 prefetch();

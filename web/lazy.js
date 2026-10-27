@@ -38,7 +38,7 @@ export const MODULES = {
     editor: ["raster", "doc"],
     catalog: ["device", "layout", "store", "lazy"],
     hub: ["device", "catalog", "store"],
-    app: ["device", "editor", "raster", "doc", "layout", "catalog", "hub", "keymap", "numfield", "lazy"],
+    app: ["device", "editor", "raster", "doc", "layout", "catalog", "hub", "store", "keymap", "numfield", "lazy"],
     // ---- on first use ----
     dialog: ["numfield"],
     pack: ["layout"],
@@ -48,7 +48,7 @@ export const MODULES = {
     qrcodegen: [],
     qr: ["raster", "qrcodegen"],
     barcode: ["raster"],
-    printers: ["device", "dialog", "catalog", "numfield", "hub"],
+    printers: ["device", "dialog", "catalog", "numfield", "hub", "store"],
     media: ["dialog", "catalog", "numfield"],
     cal: ["layout", "numfield", "pack", "catalog", "doc", "device"],
     files: ["device", "doc", "dialog"],

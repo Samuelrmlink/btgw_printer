@@ -85,6 +85,12 @@ These are part of the design. They are not tasks.
   - Why: Adding a text box, a QR code and a barcode in a row puts all three at the same spot (seen on the first browser print). Check what pm220_rp2_webapp did and match it, or place each new object in free space inside the safe area.
   - Done when: e2e: three objects added in a row don't overlap on a 50×30 label.
 
+- [ ] **F11 — The app starts the printer service it needs**
+  - Area: web.
+  - Why: Nothing starts our modules after a boot (B3, and the parent's launchers don't read our `pex` list). After a reboot the app said "no printer_hub · designing only" though both modules sat installed in the PEX partition.
+  - Needs: at boot, when `printer.drivers` is `unknown_op`: `pex.load` + `pex.start` printer_hub, then wait for it (≤ 5 s, once a second). A driver only when it is needed: before connecting a printer of it, and before a scan for its printer family ("Scan for" in the Printers dialog; our drivers are app.json's `pex` list, else nelko_tspl). PEX pool full: unload another of our drivers that has no printer in use, once. "Already loaded / running" is success; ops one at a time; a failure shows the board's message and Retry, never a retry loop.
+  - Done when: e2e on the mock (tests/e2e/service.spec.js: boot starts only the hub; a saved PM220's connect loads nelko_tspl first; pool full unloads an idle driver, or with a printer on it shows the message and Retry; a scan for a family loads its driver; all running sends no pex ops; a hub that won't start shows the message and Retry), and on the bench board after a reboot the app starts hub + driver by itself.
+
 ## Later
 
 - [ ] **F7 — Menus: a traditional menu bar on desktop, a collapsible menu sheet on touch**

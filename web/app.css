@@ -1212,3 +1212,15 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 #prompt, #wifi-sub { z-index: 30; }
 #confirm { z-index: 40; }
 #printers .picker-panel, #media .picker-panel, #vars .picker-panel { width: min(640px, 96vw); max-width: 640px; }
+
+.scan-for {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0 0;
+    font-size: 13px;
+}
+.scan-for select {
+    flex: 1;
+    min-width: 0;
+}

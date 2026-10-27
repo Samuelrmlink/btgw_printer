@@ -6,8 +6,8 @@
  * and printer.status (docs/architecture.md). */
 
 import { call, on } from "./device.js";
-import { currentPrinterAddr, findModel, findPrinter, setLiveDrivers } from "./catalog.js";
-import { askBeforeConnect, lostAgain } from "./store.js";
+import { currentPrinterAddr, findModel, findPrinter, isDriverLive, setLiveDrivers } from "./catalog.js";
+import { FALLBACK_DRIVERS, HUB_MODULE, alreadyDone, askBeforeConnect, lostAgain, poolFull } from "./store.js";
 
 const live = new Map();       // addr -> {state, why, battery, paper, lid, media, model, driver}
 let up = false;
@@ -93,6 +93,85 @@ function configOf(p) {
     return { model: p.model, density: p.density, speed: p.speed, nickname: p.nickname };
 }
 
+// ---- the printer service: printer_hub at boot, a driver when it is needed --
+
+let ours = [...FALLBACK_DRIVERS];   // our driver modules (app.json's pex list)
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export function setOurDrivers(list) {
+    ours = [...list];
+}
+export const ourDrivers = () => [...ours];
+
+async function loadAndStart(name) {
+    for (const op of ["pex.load", "pex.start"]) {
+        try {
+            await call(op, { name });
+        } catch (err) {
+            if (!alreadyDone(err)) {
+                throw Object.assign(new Error(err.message || String(err)), { code: err.code, module: name });
+            }
+        }
+    }
+}
+
+/** Ask printer.drivers once a second, ≤ 5 s, until ok() says so. */
+async function settle(ok) {
+    for (let i = 0; i < 5; i++) {
+        await refreshDrivers();
+        if (ok()) {
+            return true;
+        }
+        await pause(1000);
+    }
+    await refreshDrivers();
+    return ok();
+}
+
+/** pex.load + pex.start printer_hub, then wait for it to answer. Throws the
+ *  board's message. */
+export async function startHub() {
+    await loadAndStart(HUB_MODULE);
+    if (!(await settle(() => up))) {
+        throw new Error("printer_hub did not answer");
+    }
+}
+
+/** A driver nothing of ours is using: no printer on it connected, printing or on its way. */
+function idleDriver(driver) {
+    for (const [, s] of live) {
+        if (s.driver === driver && ["connected", "printing", "connecting", "pairing", "idle", "waiting"].includes(s.state)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Load and start a driver unless printer.drivers lists it. When the PEX pool
+ *  is full, one of our other drivers that has no printer in use is stopped
+ *  and unloaded, and the load tried once more. Throws the board's message. */
+export async function ensureDriver(driver) {
+    if (isDriverLive(driver)) {
+        return false;
+    }
+    try {
+        await loadAndStart(driver);
+    } catch (err) {
+        const spare = poolFull(err) && ours.find((d) => d !== driver && isDriverLive(d) && idleDriver(d));
+        if (!spare) {
+            throw err;
+        }
+        await call("pex.stop", { name: spare }).catch(() => {});
+        await call("pex.unload", { name: spare });
+        await refreshDrivers();
+        await loadAndStart(driver);
+    }
+    if (!(await settle(() => isDriverLive(driver)))) {
+        throw new Error(`the ${driver} driver did not register`);
+    }
+    return true;
+}
+
 // ---- asking before a Classic printer is paged (store.js askBeforeConnect) --
 
 const seen = new Set();       // addrs a scan in this page found, not lost since
@@ -114,8 +193,9 @@ export function mustAsk(p, { fresh = false } = {}) {
     return !fresh && askBeforeConnect({ transport: transportOf(p), saved: !!findPrinter(p.addr), seen: seen.has(p.addr) });
 }
 
-/** Connect p, asking first when mustAsk(p). → true once printer.connect went
- *  out (it throws what the driver said), false when the user said not now. */
+/** Connect p, asking first when mustAsk(p), loading its driver first when
+ *  it is not running. → true once printer.connect went out (it throws what
+ *  the board or the driver said), false when the user said not now. */
 export async function requestConnect(p, opts = {}) {
     if (mustAsk(p, opts)) {
         if (!asking) {
@@ -127,6 +207,7 @@ export async function requestConnect(p, opts = {}) {
             return false;
         }
     }
+    await ensureDriver(p.driver);
     await connect(p);
     return true;
 }
@@ -177,19 +258,16 @@ export function connectIfDown(p, opts) {
     return isDown(p) ? requestConnect(p, opts).catch(() => false) : Promise.resolve(false);
 }
 
-/** The current printer, if it wants auto-reconnect: connected now, or "ask"
- *  when it is a saved Classic printer (never paged without the user). */
+/** What page load does with the current printer: null (nothing: none, no
+ *  auto-reconnect, or up already), "ask" (a saved Classic printer: never
+ *  paged without the user) or "connect". The caller runs requestConnect. */
 export function autoConnect() {
     const addr = currentPrinterAddr();
     const p = addr && findPrinter(addr);
     if (!p || p.auto_reconnect === false || !isDown(p)) {
         return null;
     }
-    if (mustAsk(p)) {
-        return "ask";
-    }
-    connect(p).catch(() => {});
-    return "connecting";
+    return mustAsk(p) ? "ask" : "connect";
 }
 
 on("printer.found", (d) => {

@@ -12,6 +12,7 @@ import {
 } from "./catalog.js";
 import { setBounds } from "./numfield.js";
 import * as hub from "./hub.js";
+import { familyLabel } from "./store.js";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -26,7 +27,7 @@ export function bindPrinters({ onChange }) {
     const dlg = new Dialog("printers", {
         initialFocus: () => $("printers-list").querySelector("button") || $("printers-scan"),
         onKey: (e) => {
-            if (e.key === "s" && !/INPUT|TEXTAREA/.test(e.target.tagName) && $("printer-edit").hidden) {
+            if (e.key === "s" && !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) && $("printer-edit").hidden) {
                 e.preventDefault();
                 scan();
                 return true;
@@ -121,10 +122,16 @@ export function bindPrinters({ onChange }) {
         showErr("");
         scanning = true;
         paint();
+        // a scan only reaches drivers that run: start the chosen family's first
+        const driver = $("printers-family").value;
         try {
-            await call("printer.scan", { ms: 8000 });
+            await hub.ensureDriver(driver);
+            await call("printer.scan", driver ? { ms: 8000, driver } : { ms: 8000 });
         } catch (err) {
-            showErr(String(err.message || err));
+            showErr(err.module ? `couldn't start the ${err.module} driver: ${err.message}` : String(err.message || err));
+            scanning = false;
+            paint();
+            return;
         }
         setTimeout(async () => {
             scanning = false;
@@ -135,7 +142,8 @@ export function bindPrinters({ onChange }) {
 
     async function connect(p) {
         showErr("");
-        const done = hub.requestConnect(p).catch((err) => showErr(String(err.message || err)));
+        const done = hub.requestConnect(p).catch((err) =>
+            showErr(err.module ? `couldn't start the ${err.module} driver: ${err.message}` : String(err.message || err)));
         paint();
         await done;
         paint();
@@ -274,7 +282,26 @@ export function bindPrinters({ onChange }) {
         }
     });
 
+    /** "Scan for": our drivers (app.json), the current printer's first time round. */
+    function fillFamilies() {
+        const sel = $("printers-family");
+        const keep = sel.value;
+        sel.replaceChildren();
+        for (const d of hub.ourDrivers()) {
+            const o = document.createElement("option");
+            o.value = d;
+            o.textContent = familyLabel(d, models());
+            sel.appendChild(o);
+        }
+        const cur = findPrinter(currentPrinterAddr());
+        const want = keep || (cur && cur.driver);
+        if (want && hub.ourDrivers().includes(want)) {
+            sel.value = want;
+        }
+    }
+
     async function open() {
+        fillFamilies();
         showErr("");
         $("printer-edit").hidden = true;
         $("printers-actions").hidden = false;

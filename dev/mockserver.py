@@ -15,6 +15,14 @@ plays the parts of the board the app uses:
   python3 dev/mockserver.py --port 8096 [--mode companion|standalone] [--no-sd] [--no-hub] [--flash-readonly]
                             [--max-concurrent N [--busy-503]] [--static-delay-ms MS]
 
+PEX: printer_hub and every driver in models.json are installed and running,
+or (--pex-stopped) installed and not loaded, as after a board boot. The hub's
+printer.* ops answer only while printer_hub runs, and printer.drivers lists
+only the drivers that run. pex.list / installed / load / start / stop /
+unload work on that; --pex-pool-drivers N makes a driver's pex.load fail
+with the board's out-of-pool message while N drivers are loaded. The page's
+app.json lists the same modules, as deploy writes it.
+
 --flash-readonly answers every PUT /api/fs/... with 500 "write failed", like
 the bench board's LittleFS (parent bug B3).
 --max-concurrent N answers a static GET (not /api, not /ws) beyond N in
@@ -37,7 +45,10 @@ WEB = os.path.join(ROOT, "web")
 PARENT_JS = os.path.join(ROOT, "btgw", "web", "js")
 EXT = os.path.join(ROOT, "ext")
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-OPTS = {"mode": "companion", "sd": True, "hub": True, "flash_ro": False, "max_static": 0, "static_delay": 0.0, "busy_503": False}
+OPTS = {"mode": "companion", "sd": True, "hub": True, "flash_ro": False, "max_static": 0, "static_delay": 0.0, "busy_503": False,
+        "pex_stopped": False, "pool_drivers": 0}
+HUB = "printer_hub"
+POOL_MSG = "out of PEX pool memory: the file is 15128 bytes; the PEX pool has 12800 in one piece"
 STATIC_IN_FLIGHT = [0]
 LOCK = threading.RLock()
 CLIENTS = []   # (send fn)
@@ -60,14 +71,28 @@ ADDR_ORDER = ["pm220", "pl70e", "p21", "d30", "virtual"]
 LATE = {"driver": "nelko_tspl", "addr": "AA:BB:CC:00:10:10", "name": "PM220", "rssi": -71, "model": "pm220", "transport": "classic"}
 
 
+def pex_names():
+    return [HUB] + [d["driver"] for d in models()]
+
+
+def running(name):
+    return STATE["pex"].get(name) == "running"
+
+
+def app_json():
+    return {"label": "Printer", "name": "Label printer", "entry": "index.html",
+            "pex": [{"name": n, "file": "pex/%s.m33.pex" % n} for n in pex_names()]}
+
+
 def fake_devices():
-    out = [dict(LATE)] if STATE.get("late_named") else []
+    out = [dict(LATE)] if STATE.get("late_named") and running(LATE["driver"]) else []
     flat = [(d, m) for d in models() for m in d["models"]]
     extra = [m["id"] for d, m in flat if m["id"] not in ADDR_ORDER]
     for d, m in flat:
         i = (ADDR_ORDER + extra).index(m["id"])
-        out.append({"driver": d["driver"], "addr": "AA:BB:CC:00:%02X:%02X" % (i, i), "name": "%s %s" % (m.get("vendor", ""), m["name"]),
-                    "rssi": -50 - i * 3, "model": m["id"], "transport": m.get("transport", "")})
+        if running(d["driver"]):
+            out.append({"driver": d["driver"], "addr": "AA:BB:CC:00:%02X:%02X" % (i, i), "name": "%s %s" % (m.get("vendor", ""), m["name"]),
+                        "rssi": -50 - i * 3, "model": m["id"], "transport": m.get("transport", "")})
     return out
 
 
@@ -89,8 +114,13 @@ def reset_state():
                    "endpoint": "203.0.113.5", "endpoint_port": 51820, "last_handshake_age_ms": 4000, "rx_bytes": 1000, "tx_bytes": 900},
             "cancel": set(),
             "late_named": False,
-            "connects": [],        # every printer.connect, for the e2e suite   # LATE is in printer.devices once a scan has named it
+            "connects": [],        # every printer.connect, for the e2e suite
+            "pex": {n: (None if OPTS["pex_stopped"] else "running") for n in pex_names()},   # None: installed, not loaded
+            "pex_ops": [],         # every pex.load / start / stop / unload, as "op name"
+            "pool_drivers": OPTS["pool_drivers"],   # LATE is in printer.devices once a scan has named it
         })
+        if not OPTS["hub"]:
+            STATE["pex"][HUB] = "absent"
         STATE["fs"]["printer/mode.json"] = json.dumps({"mode": OPTS["mode"]}).encode()
         STATE["fs"]["cfg/wireguard.json"] = json.dumps({"private_key": "x" * 44, "peer_public_key": "y" * 44, "address": "10.255.255.23",
                                                         "endpoint": "203.0.113.5", "endpoint_port": 51820, "keepalive": 25}).encode()
@@ -140,8 +170,10 @@ def op(name, p):
         return {"up": False}
     if name.startswith("test."):
         return test_op(name, p)
+    if name.startswith("pex."):
+        return pex_op(name, p)
     if name.startswith("printer."):
-        if not OPTS["hub"]:
+        if not running(HUB):
             raise ApiError("unknown_op", "no such op: " + name)
         return printer_op(name, p)
     raise ApiError("unknown_op", "no such op: " + name)
@@ -157,12 +189,19 @@ def test_op(name, p):
         return {"jobs": S["jobs"]}
     if name == "test.connects":
         return {"connects": S["connects"]}
+    if name == "test.pex_ops":
+        return {"ops": S["pex_ops"]}
     if name == "test.set":
         for k in ("fail_next", "job_ms"):
             if k in p:
                 S[k] = p[k]
         if "hub" in p:
             OPTS["hub"] = bool(p["hub"])
+            S["pex"][HUB] = "running" if p["hub"] else "absent"
+        for n, st in (p.get("pex") or {}).items():   # {"name": "running" | "loaded" | null}
+            S["pex"][n] = st
+        if "pool_drivers" in p:
+            S["pool_drivers"] = int(p["pool_drivers"])
         return {"ok": True}
     if name == "test.file":
         b = fs_get(p.get("path", ""))
@@ -176,7 +215,46 @@ def test_op(name, p):
 
 
 def drivers_caps():
-    return [{"driver": d["driver"], "abi": 1, "models": d["models"]} for d in models()]
+    return [{"driver": d["driver"], "abi": 1, "models": d["models"]} for d in models() if running(d["driver"])]
+
+
+def pex_op(name, p):
+    S = STATE
+    P = S["pex"]
+    n = p.get("name", "")
+    if name == "pex.list":
+        return {"arch": "m33", "up": True, "modules": [{"name": k, "state": v} for k, v in P.items() if v in ("loaded", "running")]}
+    if name == "pex.installed":
+        return {"mounted": True, "modules": [{"name": k, "loaded": v in ("loaded", "running")} for k, v in P.items() if v != "absent"]}
+    if name not in ("pex.load", "pex.start", "pex.stop", "pex.unload"):
+        raise ApiError("unknown_op", "no such op: " + name)
+    S["pex_ops"].append("%s %s" % (name, n))
+    if n not in P or P[n] == "absent":
+        raise ApiError("not_installed", "%s is not installed" % n)
+    if name == "pex.load":
+        if P[n] is not None:
+            raise ApiError("already_loaded", "%s is already loaded" % n)
+        loaded_drivers = [k for k, v in P.items() if k != HUB and v in ("loaded", "running")]
+        if n != HUB and S["pool_drivers"] and len(loaded_drivers) >= S["pool_drivers"]:
+            raise ApiError("no_memory", POOL_MSG)
+        P[n] = "loaded"
+    elif name == "pex.start":
+        if P[n] is None:
+            raise ApiError("not_loaded", "%s is not loaded" % n)
+        if P[n] == "running":
+            raise ApiError("already_running", "%s is already running" % n)
+        P[n] = "running"
+    elif name == "pex.stop":
+        if P[n] != "running":
+            raise ApiError("not_running", "%s is not running" % n)
+        P[n] = "loaded"
+    elif name == "pex.unload":
+        if P[n] == "running":
+            raise ApiError("busy", "%s is running: stop it first" % n)
+        if P[n] is None:
+            raise ApiError("not_loaded", "%s is not loaded" % n)
+        P[n] = None
+    return {"ok": True, "name": n}
 
 
 def printer_op(name, p):
@@ -184,28 +262,35 @@ def printer_op(name, p):
     if name == "printer.drivers":
         return {"drivers": drivers_caps()}
     if name == "printer.scan":
+        started = [d["driver"] for d in models() if running(d["driver"]) and p.get("driver") in (None, "", d["driver"])]
+        tspl = "nelko_tspl" in started
+        pl70e = {"addr": "AA:BB:CC:00:01:01", "rssi": -53}
+
         def later():
-            pl70e = next(d for d in fake_devices() if d["model"] == "pl70e")
-            broadcast("printer.found", dict(LATE, name="", model=None))
-            broadcast("printer.found", {"driver": "nelko_tspl", "addr": pl70e["addr"], "name": "", "rssi": pl70e["rssi"],
-                                        "model": None, "transport": "classic"})
+            if tspl:
+                broadcast("printer.found", dict(LATE, name="", model=None))
+                broadcast("printer.found", {"driver": "nelko_tspl", "addr": pl70e["addr"], "name": "", "rssi": pl70e["rssi"],
+                                            "model": None, "transport": "classic"})
             for dev in fake_devices():
-                if dev["addr"] == LATE["addr"]:
+                if dev["addr"] == LATE["addr"] or dev["driver"] not in started:
                     continue
                 time.sleep(0.05)
                 broadcast("printer.found", dev)
-            time.sleep(0.8)
-            broadcast("printer.found", {"driver": "nelko_tspl", "addr": pl70e["addr"], "name": "PL70e-BT", "gone": True})
-            STATE["late_named"] = True
-            broadcast("printer.found", dict(LATE))
+            if tspl:
+                time.sleep(0.8)
+                broadcast("printer.found", {"driver": "nelko_tspl", "addr": pl70e["addr"], "name": "PL70e-BT", "gone": True})
+                STATE["late_named"] = True
+                broadcast("printer.found", dict(LATE))
         threading.Thread(target=later, daemon=True).start()
-        return {"started": [d["driver"] for d in models()]}
+        return {"started": started}
     if name == "printer.devices":
         return {"devices": fake_devices()}
     if name == "printer.connect":
         addr, drv = p.get("addr"), p.get("driver")
         if not addr or not drv:
             raise ApiError("bad_request", "driver and addr required")
+        if not running(drv):
+            raise ApiError("no_driver", "no driver %s" % drv)
         S["connects"].append({"driver": drv, "addr": addr})
         st = S["printers"].setdefault(addr, {})
         st.update({"driver": drv, "model": (p.get("config") or {}).get("model", ""), "state": "connecting", "battery": 87})
@@ -422,6 +507,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._file(f)
         if path == "/printer":
             return self._reply(301, b"", "text/plain", {"Location": "/printer/"})
+        if path == "/printer/app.json":
+            return self._reply(200, app_json())
         if path.startswith("/printer/js/btgw/"):
             return self._file(os.path.join(PARENT_JS, path[len("/printer/js/btgw/"):]))
         if path.startswith("/printer/"):
@@ -620,11 +707,14 @@ def main():
     ap.add_argument("--no-hub", action="store_true")
     ap.add_argument("--flash-readonly", action="store_true", help="PUT /api/fs/... answers 500 write failed")
     ap.add_argument("--max-concurrent", type=int, default=0, help="static GETs in flight past this answer 503 card busy")
+    ap.add_argument("--pex-stopped", action="store_true", help="our PEX modules installed but not loaded (a board after boot)")
+    ap.add_argument("--pex-pool-drivers", type=int, default=0, help="a driver's pex.load fails (pool full) while this many drivers are loaded")
     ap.add_argument("--busy-503", action="store_true", help="answer past --max-concurrent with 503 card busy (the old /sd queue)")
     ap.add_argument("--static-delay-ms", type=int, default=0, help="hold each static GET this long")
     a = ap.parse_args()
     OPTS.update(mode=a.mode, sd=not a.no_sd, hub=not a.no_hub, hub_default=not a.no_hub, flash_ro=a.flash_readonly,
-                max_static=a.max_concurrent, static_delay=a.static_delay_ms / 1000.0, busy_503=a.busy_503)
+                max_static=a.max_concurrent, static_delay=a.static_delay_ms / 1000.0, busy_503=a.busy_503,
+                pex_stopped=a.pex_stopped, pool_drivers=a.pex_pool_drivers)
     reset_state()
     print("mock board on http://%s:%d/printer/ (%s%s%s%s)" % (a.bind, a.port, a.mode, "" if OPTS["sd"] else ", no SD",
                                                               "" if OPTS["hub"] else ", no printer_hub",

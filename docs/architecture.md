@@ -127,6 +127,23 @@ user (logged as "waits for the user"). A Classic driver also never
 reconnects by itself: a connect is one attempt (the PIN walk and a busy
 radio aside), and a lost link or an unreachable printer ends it.
 
+**The app starts the printer service it needs** (roadmap F11). Nothing
+loads our PEX modules after a board boot (parent B3 keeps `cfg/launch.json`
+unwritten, and the parent's launchers don't read our `app.json` `pex` list),
+though they stay installed. So when `printer.drivers` answers `unknown_op`
+after the WebSocket is up, the app sends `pex.load` then `pex.start` for
+`printer_hub`, waits (≤ 5 s, asking once a second) for the hub to answer and
+carries on. A driver is loaded the same way only when it is needed: before
+`printer.connect` to a printer whose driver `printer.drivers` doesn't list
+(`web/hub.js` `ensureDriver`, inside `requestConnect`), and before a scan for
+a printer family (the Printers dialog's "Scan for": our drivers are the
+`pex` list in the `app.json` next to the page, else `nelko_tspl`). When the
+board answers that the PEX pool is full and another of our drivers is loaded
+with no printer in use on it, that one gets `pex.stop` + `pex.unload` and the
+load is tried once more. "Already loaded / running" counts as done. Ops go
+one at a time; a failure shows the board's message with a Retry and is not
+retried on its own.
+
 **The web app never pages a saved Bluetooth Classic printer by itself**
 (roadmap F9: paging one that is off stalls the gateway's Wi-Fi, parent B4).
 Every connect goes through `web/hub.js` `requestConnect`. For a printer in
