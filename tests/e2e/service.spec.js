@@ -49,13 +49,21 @@ test('connecting a saved PM220 starts nelko_tspl first, after the Turn-on prompt
   expect(await connects(page)).toEqual([{ driver: 'nelko_tspl', addr: PM220.addr }]);
 });
 
-test('PEX pool full: an idle driver of ours is unloaded for the one needed', async ({ page }) => {
-  // nelko_tspl runs with nothing on it; the pool holds one driver
-  await boot(page, { pex: { ...STOPPED, printer_hub: 'running', nelko_tspl: 'running' }, set: { pool_drivers: 1 }, printers: [PL70E] });
+test('loading a driver first unloads our other driver that has no printer in use', async ({ page }) => {
+  // nelko_tspl runs with nothing on it; the pool would hold both (the bench board's did, with 32 bytes left)
+  await boot(page, { pex: { ...STOPPED, printer_hub: 'running', nelko_tspl: 'running' }, printers: [PL70E] });
   await expect(page.locator('#status')).toContainText('Shipping: connected');
-  expect(await pexOps(page)).toEqual(['pex.load nelko_pl70e', 'pex.stop nelko_tspl', 'pex.unload nelko_tspl',
-    'pex.load nelko_pl70e', 'pex.start nelko_pl70e']);
+  expect(await pexOps(page)).toEqual(['pex.stop nelko_tspl', 'pex.unload nelko_tspl', 'pex.load nelko_pl70e', 'pex.start nelko_pl70e']);
   expect(await connects(page)).toEqual([{ driver: 'nelko_pl70e', addr: PL70E.addr }]);
+});
+
+test('a driver with a connected printer is not unloaded for another one', async ({ page }) => {
+  await boot(page, {
+    pex: { ...STOPPED, printer_hub: 'running', nelko_tspl: 'running' }, printers: [PL70E, PM220],
+    before: () => op(page, 'test.printer_state', { addr: PM220.addr, driver: 'nelko_tspl', model: 'pm220', state: 'connected' }),
+  });
+  await expect(page.locator('#status')).toContainText('Shipping: connected');
+  expect(await pexOps(page)).toEqual(['pex.load nelko_pl70e', 'pex.start nelko_pl70e']);
 });
 
 test('PEX pool full and the other driver has a printer connected: nothing unloaded, the board\'s message and Retry', async ({ page }) => {
@@ -69,12 +77,11 @@ test('PEX pool full and the other driver has a printer connected: nothing unload
   await page.waitForTimeout(2500);   // no retry on its own
   expect(await pexOps(page)).toEqual(['pex.load nelko_pl70e']);
   expect(await connects(page)).toEqual([]);
-  // the other printer goes away; Retry now frees its driver and connects
+  // the other printer goes away; Retry now frees its driver first and connects
   await op(page, 'test.printer_state', { addr: PM220.addr, driver: 'nelko_tspl', model: 'pm220', state: 'disconnected' });
   await page.click('#status-retry');
   await expect(page.locator('#status')).toContainText('Shipping: connected');
-  expect((await pexOps(page)).slice(1)).toEqual(['pex.load nelko_pl70e', 'pex.stop nelko_tspl', 'pex.unload nelko_tspl',
-    'pex.load nelko_pl70e', 'pex.start nelko_pl70e']);
+  expect((await pexOps(page)).slice(1)).toEqual(['pex.stop nelko_tspl', 'pex.unload nelko_tspl', 'pex.load nelko_pl70e', 'pex.start nelko_pl70e']);
 });
 
 test('a scan for a printer family starts its driver first', async ({ page }) => {

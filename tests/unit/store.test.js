@@ -118,7 +118,7 @@ test("only a saved Classic printer no scan in this page has found is asked about
 });
 
 test("the printer service: our drivers come from app.json's pex list, else nelko_tspl", async () => {
-    const { serviceDrivers, alreadyDone, poolFull, familyLabel, HUB_MODULE, FALLBACK_DRIVERS } = await import("../../web/store.js");
+    const { serviceDrivers, alreadyDone, familyLabel, HUB_MODULE, FALLBACK_DRIVERS } = await import("../../web/store.js");
     const appJson = { pex: [{ name: "printer_hub", file: "pex/printer_hub.m33.pex" }, { name: "nelko_tspl", file: "pex/nelko_tspl.m33.pex" },
         { name: "nelko_pl70e", file: "pex/nelko_pl70e.m33.pex" }] };
     assert.equal(HUB_MODULE, "printer_hub");
@@ -132,8 +132,6 @@ test("the printer service: our drivers come from app.json's pex list, else nelko
     assert.equal(alreadyDone({ code: "already_loaded", message: "printer_hub is already loaded" }), true);
     assert.equal(alreadyDone(new Error("already running")), true);
     assert.equal(alreadyDone({ code: "not_installed", message: "x is not installed" }), false);
-    assert.equal(poolFull(new Error("out of PEX pool memory: the file is 15128 bytes; the PEX pool has 12800 in one piece")), true);
-    assert.equal(poolFull(new Error("not installed")), false);
 
     const models = [{ driver: "nelko_tspl", vendor: "Nelko", name: "PM220" }, { driver: "nelko_tspl", vendor: "Nelko", name: "P21" },
         { driver: "nelko_pl70e", vendor: "Nelko", name: "PL70e-BT" }];

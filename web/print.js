@@ -14,6 +14,18 @@ import { counterStore } from "./templates.js";
 
 const $ = (id) => document.getElementById(id);
 const JOB_IDLE_MS = 60000;
+// The hub drops a job it has given up on (after 120 s) without a last
+// printer.job: while waiting, printer.status is asked this often, and a job
+// it no longer reports twice running ends the wait.
+const JOB_POLL_MS = 5000;
+
+/** An op error as text: the board's code when it is words ("out of PEX pool
+ *  memory: open failed"), else just the message. */
+export function opMessage(err) {
+    const msg = String((err && err.message) || err || "failed");
+    const code = err && err.code;
+    return code && /\s/.test(code) && !msg.includes(code) ? `${code}: ${msg}` : msg;
+}
 
 export function jobPath() {
     return sdAvailable() ? "sd/printer/var/job.bin" : "printer/var/job.bin";
@@ -104,6 +116,32 @@ export function bindPrint(ctx) {
                 },
                 timer: setTimeout(() => w.fail(new Error("the printer stopped answering")), JOB_IDLE_MS),
             };
+            let missed = 0;
+            const poll = setInterval(async () => {
+                if (!waiters.has(id)) {
+                    clearInterval(poll);
+                    return;
+                }
+                try {
+                    const st = await call("printer.status", {});
+                    missed = st && st.job && st.job.job === id ? 0 : missed + 1;
+                } catch {
+                    return;   // no answer is not "gone"
+                }
+                if (missed >= 2 && waiters.has(id)) {
+                    w.fail(new Error("the printer service dropped the job: it never finished"));
+                }
+            }, JOB_POLL_MS);
+            const end = w.done;
+            const fail = w.fail;
+            w.done = (d) => {
+                clearInterval(poll);
+                end(d);
+            };
+            w.fail = (e) => {
+                clearInterval(poll);
+                fail(e);
+            };
             waiters.set(id, w);
             for (const d of early.get(id) || []) {
                 if (waiters.has(id)) {
@@ -192,7 +230,7 @@ export function bindPrint(ctx) {
             ctx.setStatus(`printed ${printed} label${printed === 1 ? "" : "s"}`, "ok");
             return true;
         } catch (err) {
-            ctx.setStatus(err.cancelled ? `cancelled after ${printed} label(s)` : String(err.message || err), err.cancelled ? "" : "err");
+            ctx.setStatus(err.cancelled ? `cancelled after ${printed} label(s)` : `print failed: ${opMessage(err)}`, err.cancelled ? "" : "err");
             return false;
         } finally {
             if (printed) {
@@ -215,6 +253,7 @@ export function bindPrint(ctx) {
             cur = await ready();
         } catch (err) {
             running = null;
+            ctx.setStatus(String(err.message || err), "err");
             throw err;
         }
         try {
@@ -222,6 +261,10 @@ export function bindPrint(ctx) {
             bar("test print · sending", 0);
             await sendOne(job, 1, "test print", 0, 1);
             ctx.setStatus("test print done", "ok");
+        } catch (err) {
+            const msg = err.cancelled ? "test print cancelled" : `test print failed: ${opMessage(err)}`;
+            ctx.setStatus(msg, err.cancelled ? "" : "err");
+            throw Object.assign(new Error(msg), { cancelled: err.cancelled });
         } finally {
             running = null;
             bar(null);

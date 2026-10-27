@@ -137,10 +137,12 @@ carries on. A driver is loaded the same way only when it is needed: before
 `printer.connect` to a printer whose driver `printer.drivers` doesn't list
 (`web/hub.js` `ensureDriver`, inside `requestConnect`), and before a scan for
 a printer family (the Printers dialog's "Scan for": our drivers are the
-`pex` list in the `app.json` next to the page, else `nelko_tspl`). When the
-board answers that the PEX pool is full and another of our drivers is loaded
-with no printer in use on it, that one gets `pex.stop` + `pex.unload` and the
-load is tried once more. "Already loaded / running" counts as done. Ops go
+`pex` list in the `app.json` next to the page, else `nelko_tspl`). Only the
+driver in hand stays loaded: before that `pex.load`, every other driver of
+ours that `pex.list` shows loaded and that has no printer connected,
+connecting or printing gets `pex.stop` + `pex.unload` (two drivers side by
+side left the bench board's PEX pool 32 bytes, and the hub then failed every
+print with "out of PEX pool memory"). "Already loaded / running" counts as done. Ops go
 one at a time; a failure shows the board's message with a Retry and is not
 retried on its own.
 

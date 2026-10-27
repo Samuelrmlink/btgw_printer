@@ -7,7 +7,7 @@
 
 import { call, on } from "./device.js";
 import { currentPrinterAddr, findModel, findPrinter, isDriverLive, setLiveDrivers } from "./catalog.js";
-import { FALLBACK_DRIVERS, HUB_MODULE, alreadyDone, askBeforeConnect, lostAgain, poolFull } from "./store.js";
+import { FALLBACK_DRIVERS, HUB_MODULE, alreadyDone, askBeforeConnect, lostAgain } from "./store.js";
 
 const live = new Map();       // addr -> {state, why, battery, paper, lid, media, model, driver}
 let up = false;
@@ -147,25 +147,31 @@ function idleDriver(driver) {
     return true;
 }
 
-/** Load and start a driver unless printer.drivers lists it. When the PEX pool
- *  is full, one of our other drivers that has no printer in use is stopped
- *  and unloaded, and the load tried once more. Throws the board's message. */
+/** Load and start a driver unless printer.drivers lists it. Only the driver
+ *  for the printer in hand stays loaded: first every other driver of ours
+ *  that is loaded and has no printer in use is stopped and unloaded (two
+ *  drivers loaded side by side left the bench board's PEX pool 32 bytes,
+ *  and every print then failed). Throws the board's message. */
 export async function ensureDriver(driver) {
     if (isDriverLive(driver)) {
         return false;
     }
+    await refreshStatus();
+    let loaded = [];
     try {
-        await loadAndStart(driver);
-    } catch (err) {
-        const spare = poolFull(err) && ours.find((d) => d !== driver && isDriverLive(d) && idleDriver(d));
-        if (!spare) {
-            throw err;
-        }
-        await call("pex.stop", { name: spare }).catch(() => {});
-        await call("pex.unload", { name: spare });
-        await refreshDrivers();
-        await loadAndStart(driver);
+        const list = await call("pex.list");
+        loaded = (list.modules || []).filter((m) => m && (m.state === "loaded" || m.state === "running")).map((m) => m.name);
+    } catch {
+        /* no list: unload nothing */
     }
+    for (const other of ours) {
+        if (other !== driver && loaded.includes(other) && idleDriver(other)) {
+            await call("pex.stop", { name: other }).catch(() => {});   // a loaded, stopped one says so: fine
+            await call("pex.unload", { name: other });
+        }
+    }
+    await refreshDrivers();
+    await loadAndStart(driver);
     if (!(await settle(() => isDriverLive(driver)))) {
         throw new Error(`the ${driver} driver did not register`);
     }

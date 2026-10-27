@@ -106,6 +106,8 @@ def reset_state():
             "jobs": [],         # every printer.print, with the bitmap's sha256
             "next_job": 1,
             "fail_next": None,
+            "print_error": None,   # {"code","message"}: the next printer.print answers that error
+            "job_hang": False,     # printer.print takes the job, then the hub drops it without a word
             "job_ms": 30,
             "wifi": {"mode": "sta", "want": "auto", "ssid": "BenchNet", "ip": "10.0.0.23", "ap": False, "ap_ssid": "BTGW-Printer",
                      "ap_psk": "printer123", "ap_clients": 0, "error": ""},
@@ -192,7 +194,7 @@ def test_op(name, p):
     if name == "test.pex_ops":
         return {"ops": S["pex_ops"]}
     if name == "test.set":
-        for k in ("fail_next", "job_ms"):
+        for k in ("fail_next", "job_ms", "print_error", "job_hang"):
             if k in p:
                 S[k] = p[k]
         if "hub" in p:
@@ -311,7 +313,9 @@ def printer_op(name, p):
                 broadcast("printer.state", {"driver": st.get("driver"), "addr": addr, "state": "disconnected"})
         return {"ok": True}
     if name == "printer.status":
-        return {"printers": [{"addr": a, **st} for a, st in S["printers"].items()], "job": None}
+        cur = next((j for j in S["jobs"] if j["state"] in ("queued", "sending") and not j.get("dropped")), None)
+        job = {"job": cur["job"], "state": cur["state"], "driver": cur["params"].get("driver")} if cur else None
+        return {"printers": [{"addr": a, **st} for a, st in S["printers"].items()], "job": job}
     if name == "printer.cancel":
         S["cancel"].add(p.get("job"))
         S["cancel"].add(None)
@@ -321,6 +325,9 @@ def printer_op(name, p):
         st = S["printers"].get(addr)
         if not st or st.get("state") not in ("connected", "idle"):
             raise ApiError("not_connected", "printer not connected")
+        if S["print_error"]:
+            e, S["print_error"] = S["print_error"], None
+            raise ApiError(e.get("code", "error"), e.get("message", "failed"))
         w, rows = int(p.get("width_dots", 0)), int(p.get("rows", 0))
         data = fs_get(p.get("path", ""))
         if data is None:
@@ -336,6 +343,9 @@ def printer_op(name, p):
         fail = S["fail_next"]
         S["fail_next"] = None
         copies = max(1, int(p.get("copies", 1)))
+        if S["job_hang"]:
+            rec["dropped"] = True   # queued, then gone: no printer.job, not in printer.status
+            return {"job": jid}
 
         def run():
             total = len(data)

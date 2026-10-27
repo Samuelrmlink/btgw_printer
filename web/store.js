@@ -109,11 +109,6 @@ export function alreadyDone(err) {
     return /already/i.test(`${(err && err.code) || ""} ${(err && err.message) || ""}`);
 }
 
-/** A pex.load error that means the PEX pool has no room for the module. */
-export function poolFull(err) {
-    return /pex pool|out of pool|pool memory/i.test(`${(err && err.code) || ""} ${(err && err.message) || ""}`);
-}
-
 /** "Nelko PM220 / P21" for a driver, from its models ({driver, vendor, name}). */
 export function familyLabel(driver, models) {
     const mine = (models || []).filter((m) => m.driver === driver);

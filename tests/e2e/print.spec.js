@@ -91,3 +91,30 @@ test('print is refused without a connected printer and the printer dialog opens'
   await expect(page.locator('#printers')).toBeVisible();
   await expect(page.locator('#status')).toContainText('pick a printer first');
 });
+
+test('a print the hub refuses ends with its error, for Print and for Test print', async ({ page }) => {
+  await fresh(page, { printer: PM220 });
+  const refuse = () => op(page, 'test.set', { print_error: { code: 'out of PEX pool memory', message: 'open failed' } });
+  await refuse();
+  await page.click('#print');
+  await expect(page.locator('#status')).toHaveText('print failed: out of PEX pool memory: open failed');
+  await expect(page.locator('#job-bar')).toBeHidden();
+  await refuse();
+  await page.keyboard.press('Shift+C');
+  await expect(page.locator('#cal')).toBeVisible();
+  await page.click('#cal-test');
+  await expect(page.locator('#status')).toHaveText('test print failed: out of PEX pool memory: open failed');
+  await expect(page.locator('#cal-err')).toContainText('test print failed: out of PEX pool memory: open failed');
+  expect(await jobs(page)).toEqual([]);
+});
+
+test('a job the hub drops without a word times out with a message', async ({ page }) => {
+  test.setTimeout(45000);
+  await fresh(page, { printer: PL70E });
+  await op(page, 'test.set', { job_hang: true });
+  await page.click('#print');
+  await expect(page.locator('#job-bar')).toBeVisible();
+  await expect(page.locator('#status')).toHaveText('print failed: the printer service dropped the job: it never finished', { timeout: 20000 });
+  await expect(page.locator('#job-bar')).toBeHidden();
+  await expect(page.locator('#print')).toBeEnabled();
+});
