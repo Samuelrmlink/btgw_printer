@@ -14,7 +14,10 @@ under --sd-dir (default apps/printer), with mode.json beside it. The files
 stay gzipped, as on flash, so the board's GET /sd/<path> route has to serve
 <path>.gz with Content-Encoding: gzip and <dir>/index.html for a folder
 (docs/parent-requirements.md R2); the app opens at --sd-url (default
-/sd/<sd-dir>/). Files of ours left over in that folder are deleted. The parent UI's switch button
+/sd/<sd-dir>/). Files of ours left over in that folder are deleted.
+It also writes the app's registration for the parent UI (R12): app.json,
+icon.svg, ext/index.js (the switch button) and the modules named by --pex
+under <sd-dir>/pex/. The parent UI's switch button
 (js/ext/printer-switch/) still has to live on flash, because the parent loads
 extensions from there; it is rewritten to open --sd-url. Labels, printer
 configs and job files are not moved by this; the app picks their store.
@@ -94,10 +97,22 @@ def put(base, target, rel, data, dry):
 def point_switch(data, url):
     """The parent UI's switch button, opening url instead of /printer/."""
     src = gzip.decompress(data).decode()
-    old = 'const TARGET = "/printer/";'
+    old = ': "/printer/";'
     if old not in src:
         sys.exit("ext/printer-switch/index.js: TARGET line not found")
-    return gzip.compress(src.replace(old, "const TARGET = %s;" % json.dumps(url)).encode(), 9, mtime=0)
+    return gzip.compress(src.replace(old, ": %s;" % json.dumps(url), 1).encode(), 9, mtime=0)
+
+
+def manifest(pex):
+    """sd:/apps/printer/app.json, the parent's app registration (R12)."""
+    with open(os.path.join(ROOT, "package.json")) as f:
+        version = json.load(f).get("version", "0")
+    return json.dumps({
+        "id": "printer", "name": "Label printer", "version": version,
+        "description": "Design and print labels on Bluetooth label printers",
+        "entry": "index.html", "icon": "icon.svg", "ext": "ext/index.js",
+        "pex": [{"name": n, "file": "pex/%s.m33.pex" % n} for n in pex],
+        "autostart": True}, indent=1).encode()
 
 
 def remote_sd(base, d):
@@ -121,6 +136,9 @@ def main():
     ap.add_argument("--target", choices=("flash", "sd"), default="flash", help="where the app's files go")
     ap.add_argument("--sd-dir", default="apps/printer", help="--target sd: the app's folder on the card")
     ap.add_argument("--sd-url", help="--target sd: the URL the board serves it at (default /sd/<sd-dir>/)")
+    ap.add_argument("--pex", default="printer_hub,nelko_tspl",
+                    help="--target sd: modules to copy to <sd-dir>/pex/ and list in app.json, in start order "
+                         "(from build/drivers/pex/; '' for none)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)   # keep warnings in order when piped
@@ -150,6 +168,23 @@ def main():
                 sent.add(sd_dir + "/" + name)
         put(base, "sd", sd_dir + "/mode.json", mode, a.dry_run)
         sent.add(sd_dir + "/mode.json")
+        # The app's registration and parts for the parent (R12): manifest,
+        # icon, the switch button as the app's extension, and its modules.
+        pex = [n for n in a.pex.split(",") if n]
+        extra = {"app.json": manifest(pex)}
+        with open(os.path.join(ROOT, "ext", "app-icon.svg"), "rb") as f:
+            extra["icon.svg"] = f.read()
+        with open(os.path.join(ROOT, "ext", "printer-switch", "index.js"), "rb") as f:
+            extra["ext/index.js"] = f.read()
+        for n in pex:
+            src = os.path.join(ROOT, "build", "drivers", "pex", n + ".m33.pex")
+            if not os.path.exists(src):
+                sys.exit("%s not built: run tools/build.py drivers" % src)
+            with open(src, "rb") as f:
+                extra["pex/%s.m33.pex" % n] = f.read()
+        for name, body in sorted(extra.items()):
+            put(base, "sd", sd_dir + "/" + name, body, a.dry_run)
+            sent.add(sd_dir + "/" + name)
         for p in remote_sd(base, sd_dir):
             if p not in sent:
                 print("DELETE sd:/" + p)

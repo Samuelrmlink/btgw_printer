@@ -228,7 +228,7 @@ and with curl against 10.255.255.23:
 
 ### R3 (Should): a launcher API for extensions
 
-Add `app.addLauncher({id, label, href | onClick})`, which puts a button in the toolbar or main menu. It is for `js/ext/<name>/index.js` extensions. Today the only hook is `app.addWindow`, so our button has to live inside a window.
+Superseded by R12, which needs the same hook (`app.addLauncher`) and covers apps that live on the card.
 
 ### R4 (Should): PEX op budget
 
@@ -351,3 +351,36 @@ modules only fit with a reboot and a fixed install order. What we measured:
 **Done when:** on the bench board, with Anker and Pinecil installed, a new
 printer_hub plus one driver can be installed from the card and started
 without a reboot, in either order.
+
+### R12 (Must for companion mode): installable apps — files on the card, registered with the parent UI (2026-10-27)
+
+**The problem.** In companion mode there is no supported way to reach our app from the BTGW UI, or to add an app to a board without replacing the parent's files:
+- Extensions load only from flash `js/ext/<name>/index.js` (web/js/extensions.js). On the bench board flash refuses writes (B3), so our "Printer" button (`js/ext/printer-switch/`) cannot be installed. A board without working flash, or one whose flash is full, can't take an add-on at all.
+- An extension can only add a window (`app.addWindow`). Our button reaches into `#toolbar` and inserts a `.tool-btn` before `#settings-btn`. That breaks whenever the toolbar changes.
+- An add-on's PEX modules can't start themselves on boot without writing `cfg/launch.json` on flash (B3 again), and that file is shared by every add-on.
+
+**Wanted: an app is a folder with a manifest; the parent finds it, lists it and launches it.** We, and any later add-on, install by copying files. Nothing in the parent's tree or its flash files changes.
+
+1. **Discovery.** At startup the UI (and `sys.info` or a new `apps.list` op) reads `sd:/apps/<id>/app.json` for every folder in `sd:/apps/`, and `apps/<id>/app.json` on LittleFS for boards without a card. No central registry file to edit: a folder is an app, as `js/ext/` already works.
+2. **Manifest** (`app.json`, small, extra keys ignored):
+   ```json
+   {"id":"printer","name":"Label printer","version":"0.2.0",
+    "description":"Design and print labels on Bluetooth label printers",
+    "entry":"index.html","icon":"icon.svg",
+    "ext":"ext/index.js",
+    "pex":[{"name":"printer_hub","file":"pex/printer_hub.m33.pex"},
+           {"name":"nelko_tspl","file":"pex/nelko_tspl.m33.pex"}],
+    "autostart":true}
+   ```
+   - `id` matches the folder name (`[a-z0-9_-]+`).
+   - `entry` is served at `/sd/apps/<id>/<entry>` (the R2 route). The launcher opens `/sd/apps/<id>/`.
+   - `icon` (optional) is a small SVG or PNG in the folder.
+   - `ext` (optional) is an extension module loaded from the app's folder, exactly like `js/ext/<name>/index.js` today, but from the card: `register(app)` with the same `app` object.
+   - `pex` (optional) lists the app's modules in start order. `autostart` true means: at boot, install-or-load and start them in that order (that is R5, without `cfg/launch.json`). A module already installed with the same build id is just loaded. Failures go to the log and `pex.faults`, not a stopped boot.
+3. **Launcher.** The parent UI shows every app as a toolbar or menu entry (name and icon) that opens its `entry`, plus `app.addLauncher({id,label,href|onClick,icon})` for extensions (the old R3). A window that lists the apps (name, version, description, whether its modules are running, Open, Remove) would be nice; Remove deletes the folder after stopping its modules.
+4. **The way back.** The app needs to know where the parent UI is: `/` today. If that can change, put it in `sys.info` (`"ui":"/"`).
+5. **Order and safety.** Apps load after the parent's own windows. An app that fails to load is skipped with a log line, as extensions are today. An app can't replace the parent's own files: `entry` and `ext` resolve inside its own folder.
+
+**What we do on our side** (already, or once this lands): `tools/deploy.py --target sd` writes `sd:/apps/printer/` with `app.json`, `icon.svg`, the app and `ext/index.js` (the switch button, which becomes an `addLauncher` call), with the modules under `sd:/apps/printer/pex/`. Our app shows its "BTGW" button only when the parent says it is there (companion).
+
+**Done when:** on the bench board, with no file of ours on flash, copying `sd:/apps/printer/` to the card and reloading the BTGW UI shows a "Label printer" launcher that opens `/sd/apps/printer/`; after a reboot printer_hub and nelko_tspl are running in manifest order; removing the folder removes the launcher.
