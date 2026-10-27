@@ -92,6 +92,40 @@ A full run takes about 25 minutes of wall time.
 - **PM220 printed** through printer_hub + driver from a PC script (tools/bench_print.py, job file on the card): 384×239 test page on 50×30 labels, job queued → sending → printing → done; RFID roll read as 50×30 gap. Owner confirmed the label.
 - nelko_tspl (PM220 + P21) installed from `sd:/apps/printer-pex/`; connects to the PM220 (31:9D:68:1F:38:A4) first try at security level 0; status battery 80, fw 0.1.39.
 - Scan on hardware: the PM220's name arrived after the 2 s wait, so it was reported with `model:null`. Fixed: 6 s wait plus a 20 s late-name watch that re-reports (model, or `gone:true`).
-- Module memory: installs need the whole file in the pool, and RW reservations are taken at boot. Order that works: uninstall ours, reboot, install the driver, install the hub, load and start hub then driver. Parent R11.
-- Flash writes still fail (B3), so there's no autostart: after each boot, start printer_hub, then the driver, by op.
+- Module updates and starting after a boot: see "Updating our modules on the bench board" below. Every reboot there is a firmware workaround, not a step.
 - 2026-10-27: the parent's launchers (dev 719b357) read `sd:/apps/printer/app.json` (`"label":"Printer"`), and the BTGW toolbar shows a Printer button to `/sd/apps/printer/`. Modules now live in `sd:/apps/printer/pex/` (install with `pex.install {"path":"sd:/apps/printer/pex/<name>.m33.pex"}`); the old `sd:/apps/printer-pex/` folder is gone. `deploy.py --target sd` writes nothing outside `apps/printer/`.
+
+## Updating our modules on the bench board
+
+**A reboot is never part of our procedure.** Needing one means a firmware
+bug, which goes to the parent (docs/parent-requirements.md and
+docs/parent-issues/), not a step we keep doing. Until the owner says a fix is
+on the device, we don't reboot the board to get around it.
+
+On a board in working order an update is: put the new `.pex` in
+`sd:/apps/printer/pex/` (`deploy.py --target sd` does this), then for each
+changed module `pex.stop`, `pex.unload`, `pex.uninstall`,
+`pex.install {"path":"sd:/apps/printer/pex/<name>.m33.pex"}`, `pex.load`,
+`pex.start`, with printer_hub started before the drivers. The app itself is
+only files on the card and never needs a reboot.
+
+On the bench board (2026-10-27, parent dev 719b357, Anker and Pinecil
+installed) that doesn't work yet, because of firmware bugs:
+
+| What breaks | Bug | Workaround used on 2026-10-27 (no longer allowed) |
+|---|---|---|
+| `pex.install` from the card needs the whole file in one piece of the pool: a 14.9 KB driver didn't fit the 12.8 KB free | R11 item 1 | reboot with ours uninstalled, then install the driver before the hub |
+| the RW of every installed module is reserved at boot and isn't given back by an uninstall | R11 item 2 | reboot after uninstalling |
+| `pex.uninstall` needs a 3 KB pool buffer for the index and fails with `PEX pool full (index update)` on a full pool | B5 ([parent-issues/B5](../parent-issues/B5-pex-index-update-needs-pool.md)) | reboot so nothing of ours is loaded, then uninstall |
+| a module installed after boot runs from RAM until the next boot | R11 item 3 (documented behaviour) | none needed; it just costs pool |
+| nothing of ours starts after a boot: `cfg/launch.json` can't be written | B3 (LittleFS writes fail) and R5 | start printer_hub, then the driver, by op |
+
+Each of those reboots also stopped Anker, Pinecil and every other client of
+the board. The owner has the BTGW agent fixing B5/R11. Until they're on the
+device, a module that needs replacing stays as it is. Ship the change on the
+branch and note here that the board runs the older build.
+
+**On the board now (2026-10-27):** printer_hub and nelko_tspl installed from
+`sd:/apps/printer/pex/`, the nelko_tspl build with the two-attempt limit
+(101cf16). Not yet on the board: fcf49a7 (no self-retry for Classic, hub skips
+Classic auto-connect), waiting for the B5/R11 fix.

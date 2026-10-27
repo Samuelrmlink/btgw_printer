@@ -36,7 +36,7 @@ These are part of the design. They are not tasks.
 - [ ] **F1 — First labels from the browser on real printers**
   - Area: web, hub, driver.
   - Why: Every printer prints in mcusim, and the PM220 has printed a test page sent from a PC script. Nothing has printed from the app's own UI yet.
-  - Needs: F2 for loading from the card (or `tools/serve_dist.py` meanwhile). On the bench board printer_hub and the driver are installed from `sd:/apps/printer-pex/` and started by op after each boot (parent B3 stops autostart; module memory is parent R11).
+  - Needs: F2 for loading from the card (or `tools/serve_dist.py` meanwhile). On the bench board printer_hub and the driver are installed from `sd:/apps/printer/pex/` and started by op after a boot (parent B3 stops autostart). Replacing a module there needs a reboot until parent B5/R11 are fixed; we don't reboot to get around firmware bugs ([notes/integration.md](notes/integration.md)).
   - Done when: from the app, a calibrated 50×30 label with text, QR and barcode prints on the PM220, placed where the old pm220 app put it; a 3-row CSV batch prints; then a 4×6 label prints on the PL70e-BT, and a 3×1 when that roll is in.
   - 2026-10-27: PM220 printed a 384×239 test page through printer_hub + nelko_tspl from tools/bench_print.py (job file on the card). The owner confirmed the label.
   - 2026-10-27: from the app on the card (`/sd/apps/printer/`, lazy build, peak 2 requests): the saved PM220 auto-connected and a 50×30 label with text, QR and barcode printed ("printed 1 label"). Sharp, inside the label, placed as in the preview (photo from the owner). Still open: a deliberate layout compared with the old pm220 app, a CSV batch, then the PL70e-BT.
@@ -74,10 +74,11 @@ These are part of the design. They are not tasks.
   - Done when: the table is written, every row matches or has a reason, and the e2e covers it. Refinements after that are new items.
 
 - [ ] **F9 — Don't knock the board off Wi-Fi when a printer is off**
-  - Area: web, driver, parent.
-  - Why: Paging a switched-off Classic printer stalls the gateway's Wi-Fi for ~35 s per attempt (parent B4). The app auto-connects to the saved printer on every page load, so opening the app with the printer off makes the board unreachable, the app's own loading included.
-  - Needs: nelko_tspl already stops after two unreachable attempts. The app: auto-connect once per page load at most, not while the page is still loading modules, and never again in the background after "not reachable"; a clear "printer is off? Connect" action instead. Revisit once B4 is fixed.
-  - Done when: e2e with a mock printer that is off: one connect attempt after boot finished, none after, and the status offers Connect.
+  - Area: web, hub, driver, parent.
+  - Why: Paging a switched-off Classic printer stalls the gateway's Wi-Fi for ~35 s per attempt (parent B4). The app auto-connected to the saved printer on every page load, so opening the app with the printer off made the board unreachable, the app's own loading included. BLE does not do this.
+  - Needs: nothing pages a known (saved in `printers.json`) Classic printer without the user. Web: every connect goes through `hub.js` `requestConnect`, which for a saved Classic printer first shows "Turn on the printer" (Connect / Cancel) and only Connect sends `printer.connect`; at load that prompt comes once, after boot; Cancel leaves a Connect action on the status line; Print with the printer down asks the same and goes on after "connected". No prompt for BLE, for a printer being added from a scan, or for one a scan in this page found, until the driver reports it lost again (`why` "link lost" / "not reachable" / "stopped retrying"). Hub and driver: no connect of a Classic printer on their own (on driver registration, or retries after an unreachable page). Revisit once B4 is fixed.
+  - Done when: e2e on the mock: a saved Classic printer gets no `printer.connect` at boot, the prompt shows, Cancel sends none and leaves Connect, Connect sends one; a BLE printer connects with no prompt; Print with a disconnected Classic printer asks, prints after Connect and prints nothing after Cancel; a printer picked from a scan, or found by one, connects without the prompt (tests/e2e/connect.spec.js). And the hub and driver side checked in mcusim or on the bench.
+  - Web side done 2026-10-27 (browser tests, all three mock projects). Open: the hub/driver side.
 
 - [ ] **F10 — New objects don't land on top of each other**
   - Area: web.
