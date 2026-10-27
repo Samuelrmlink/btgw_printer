@@ -330,7 +330,7 @@ static void t_print_refused_no_paper(void) {
     fh_run(500);
     prn_job_t j;
     fill_job(&j, 104, 10);
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), PEX_ESTATE);
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), PRN_DRV_ENOTREADY);
 }
 
 static void t_cancel_pads_bitmap(void) {

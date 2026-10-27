@@ -124,6 +124,10 @@ static void t_bad_jobs(void) {
                                     "\"rows\":240,\"media\":{\"w_mm\":50}}", R, sizeof R), PEX_EINVAL);
     CHECK_EQ(fh_op("printer.print", "{\"driver\":\"printer_virtual\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"
                                     "\"rows\":240}", R, sizeof R), PEX_EINVAL);
+    /* connected but out of paper: refused as not ready, not "not connected" */
+    CHECK(fh_op("printer.print", "{\"driver\":\"printer_virtual\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"
+                                 "\"rows\":240,\"media\":{\"w_mm\":50,\"h_mm\":30},\"options\":{\"no_paper\":true}}", R, sizeof R) > 0);
+    CHECK(wait_ev("printer.job", "\"failed\"", "printer not ready", 200));
     /* not connected: the driver refuses at JOB_BEGIN, the job fails */
     fh_op("printer.disconnect", "{}", R, sizeof R);
     CHECK(fh_op("printer.print", "{\"driver\":\"printer_virtual\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"

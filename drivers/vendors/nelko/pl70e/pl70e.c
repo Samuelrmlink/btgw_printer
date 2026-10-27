@@ -477,7 +477,7 @@ static int drv_job_begin(const prn_job_t *j) {
     if (s_job_st != JOB_NONE || s_pad_left || s_pad_crlf) { return PEX_EBUSY; }
     if (j->row_bytes == 0 || j->row_bytes * 8u > PL70E_HEAD_DOTS || j->rows_total == 0) { return PEX_EINVAL; }
     if (j->black_bit != 0) { return PEX_EINVAL; }
-    if (s_status == PL70E_ST_NOPAPER || s_status == PL70E_ST_LIDOPEN) { return PEX_ESTATE; }
+    if (s_status == PL70E_ST_NOPAPER || s_status == PL70E_ST_LIDOPEN) { return PRN_DRV_ENOTREADY; }
     s_job = *j;
     tspl_job_t t;
     make_tspl(&t, j);

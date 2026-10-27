@@ -27,6 +27,11 @@
 #define PRN_DRV_SYM "prn_drv"
 #define PRN_ABI 1
 
+/* JOB_BEGIN's refusal when the printer is connected but can't print now
+ * (out of paper, lid open); its status says which. Outside the PEX_E*
+ * range, so the hub can tell it from "not connected" (PEX_ESTATE). */
+#define PRN_DRV_ENOTREADY (-100)
+
 /* ---- driver -> hub (prn_hub) ---- */
 enum {
     /* a0 = const char *driver module name, a1 = PRN_ABI. The hub finds the
@@ -70,7 +75,8 @@ enum {
      * Prepare to accept job->rows_total rows. Returns 1 if the driver prints
      * job->copies itself from one pass of the rows (TSPL "PRINT n"), 0 if
      * the hub must feed the rows once per copy (job->copy counts), or a
-     * negative PEX_E* to refuse the job. */
+     * negative PEX_E* (PEX_ESTATE: not connected) or PRN_DRV_ENOTREADY to
+     * refuse the job. */
     PRN_DRV_JOB_BEGIN = 7,
     /* a0 = const uint8_t *rows, a1 = byte count (always whole rows of
      * job->row_bytes). Returns the bytes taken (whole rows; may be fewer

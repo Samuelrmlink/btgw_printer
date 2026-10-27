@@ -299,7 +299,8 @@ static void rewind_pass(void) {
 static void begin_feed(void) {
     int rc = dcall(J.d, PRN_DRV_JOB_BEGIN, P(&J.job), 0, 0);
     if (rc < 0) {
-        job_end(PRN_JOB_FAILED, rc == PEX_EBUSY ? "printer busy" : rc == PEX_ESTATE ? "not connected" : "refused");
+        job_end(PRN_JOB_FAILED, rc == PEX_EBUSY ? "printer busy" : rc == PEX_ESTATE ? "not connected"
+                : rc == PRN_DRV_ENOTREADY ? "printer not ready (paper out or lid open?)" : "refused");
         return;
     }
     J.native = rc == 1;

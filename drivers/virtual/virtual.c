@@ -6,7 +6,8 @@
  * other path real TSPL drivers do not take.
  *
  * Job options: {"rate": bytes per 5 ms tick (default 1024),
- *               "fail_at": fail after this many rows, "no_file": true}. */
+ *               "fail_at": fail after this many rows, "no_file": true,
+ *               "no_paper": true refuses the job as not ready}. */
 #include "pex.h"
 #include "core/prn_core.h"
 
@@ -108,6 +109,9 @@ int prn_drv(uint32_t cmd, uint32_t a0, uint32_t a1, uint32_t a2) {
         const prn_job_t *j = (const prn_job_t *)(uintptr_t)a0;
         if (!s_connected) { return PEX_ESTATE; }
         if (s_in_job) { return PEX_EBUSY; }
+        int nopaper = 0;
+        pex_json_bool(j->options, "no_paper", &nopaper);
+        if (nopaper) { return PRN_DRV_ENOTREADY; }
         s_job = *j;
         int64_t v;
         s_rate = pex_json_int(j->options, "rate", &v) && v > 0 ? (uint32_t)v : 1024u;
