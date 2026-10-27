@@ -205,6 +205,27 @@ The same rules as the LittleFS static files:
 
 **Done when:** `http://<board>/sd/apps/printer/` loads our app with all modules from the card.
 
+**Update 2026-10-27, after the `.gz`/index firmware was flashed:** gzip and
+index serving now work (every file comes back with its type and
+`Content-Encoding: gzip`). Two problems remain, both measured in Chromium
+and with curl against 10.255.255.23:
+
+1. **Concurrent GETs fail with 503 (blocker).** The SD worker runs at most
+   two transfers (`xfer_max: 2` in `/api/sd`). A third request gets
+   `503 {"error":"card busy"}` with `Retry-After: 1` at once. A browser loads an
+   ES-module app's imports in parallel (ours fetches about 25 at once) and never
+   retries a failed module, so the page stops loading: 9 of the app's
+   modules got 503 on the first load. With 8 parallel curl fetches of one file,
+   2 got 200 and 6 got 503. Needed: hold a `/sd/` GET until a slot frees
+   (a queue as deep as the HTTP connection pool, or a few seconds' wait)
+   instead of refusing it. LittleFS static serving copes with the same load.
+2. **No redirect for a folder without the trailing slash (minor).**
+   `GET /sd/apps/printer` serves `index.html` straight away, so relative URLs
+   resolve against `/sd/apps/`: the browser asked for `/sd/apps/app.css`
+   (404) before our page's script added the slash. Needed: `301` to
+   `/sd/apps/printer/`, as most static servers do.
+
+
 ### R3 (Should): a launcher API for extensions
 
 Add `app.addLauncher({id, label, href | onClick})`, which puts a button in the toolbar or main menu. It is for `js/ext/<name>/index.js` extensions. Today the only hook is `app.addWindow`, so our button has to live inside a window.
