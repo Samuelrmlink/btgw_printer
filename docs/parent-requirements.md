@@ -388,3 +388,19 @@ without a reboot, in either order.
 **Status 2026-10-27 (parent dev 719b357, `ae55c4c` "Add a toolbar button for a web app that ships its own folder"):**
 - Done: discovery of `apps/<id>/app.json` (or `.gz`) on flash and on the card; its `"label"` is a toolbar button that opens `/sd/apps/<id>/` (the folder is the link; a URL in the file is ignored); `app.addLauncher({id,label,href|onClick})` for code in the page. Seen on the bench board: our `sd:/apps/printer/app.json` gives a "Printer" button to `/sd/apps/printer/`, with nothing of ours on flash.
 - Not part of it (still open, lower priority): `ext` loaded from the app's folder; `pex` start order and autostart from the manifest (R5; on this board `cfg/launch.json` can't be written, B3); an apps window with versions and Remove. We no longer need an extension for the button.
+
+### B4 (Must): paging a Classic device that doesn't answer stalls all Wi-Fi for ~35 s (2026-10-27, bench board, parent dev 719b357)
+
+While a `pex_bt_classic_open` (via our `printer.connect`) pages a PM220 that is switched off, the gateway drops off the network. Measured from the PC, one request per second, during one connect attempt:
+- idle: every request 0.20–0.24 s, ping up;
+- during the attempt: flash static `/`, a card file `/sd/apps/printer/mode.json` and ping were all lost for about 35 s (6 s curl timeouts in a row, ping lost), then everything was back at 0.2 s;
+- an earlier run with 12 s timeouts lost 7 requests in a row (~85 s) across the attempt and the driver's retry.
+- `/api/sd` afterwards: `xfers 0`, last failure `499 client gone`. The card was fine; the requests never got through Wi-Fi.
+
+Effect: a web app that auto-connects to a printer that is off makes the whole board unreachable, its own page load included (we saw module requests hang mid-boot). Other clients and WebSockets on the board stall too.
+
+Needed: Classic paging (and inquiry) must leave Wi-Fi airtime, the same coexistence C4 asked for: a page window and a page timeout that interleave with Wi-Fi, never one long radio hold. A shorter page timeout for `pex_cl_open_t` (a field, e.g. `page_ms`) would let a driver probe cheaply.
+
+Our side meanwhile: nelko_tspl stops retrying after two attempts in a row that find no printer (`UNREACHABLE_MAX`); a connect op starts over.
+
+**Done when:** during a connect attempt to a switched-off Classic printer, the PC's 1-per-second requests to the board keep answering within 1 s.
