@@ -222,3 +222,32 @@ export function confirmDialog(text, { okLabel = "OK", danger = false } = {}) {
         confirmDlg.open();
     });
 }
+
+/** Before a saved Bluetooth Classic printer is paged (hub.js requestConnect):
+ *  → true for Connect (Enter), false for Cancel (Esc). */
+let turnOnDlg = null;
+export function turnOnDialog(name) {
+    if (!turnOnDlg) {
+        turnOnDlg = new Dialog("turn-on", {
+            onClose: () => turnOnDlg._resolve && turnOnDlg._resolve(false),
+            initialFocus: () => document.getElementById("turn-on-ok"),
+        });
+        document.getElementById("turn-on-ok").addEventListener("click", () => {
+            const r = turnOnDlg._resolve;
+            turnOnDlg._resolve = null;
+            turnOnDlg.close();
+            r && r(true);
+        });
+        document.getElementById("turn-on-cancel").addEventListener("click", () => turnOnDlg.close());
+    }
+    document.getElementById("turn-on-text").textContent =
+        `Switch on ${name} and keep it nearby, then press Connect. ` +
+        "(While the gateway looks for a printer that is off, its Wi-Fi pauses for about half a minute.)";
+    return new Promise((resolve) => {
+        turnOnDlg._resolve = (v) => {
+            turnOnDlg._resolve = null;
+            resolve(v);
+        };
+        turnOnDlg.open();
+    });
+}

@@ -1160,6 +1160,7 @@ const BIND = {
         render,
         setStatus,
         isConnected: (addr) => hub.isUp(addr),
+        ensureConnected,
         openPrinters: () => openUi("printers", (u) => u.open()),
         changed: () => refreshPrinterUi(),
     }),
@@ -1591,7 +1592,10 @@ function refreshPrinterUi() {
     $("printer-name").textContent = p ? (p.nickname || p.addr) : (state.model ? `${state.model.name} (design)` : "none");
     const up = !!p && hub.isUp(p.addr);
     $("printer-btn").classList.toggle("ok", up);
-    $("print").disabled = !up || !!(uiNow.get("print") && uiNow.get("print").busy());
+    const busy = !!(uiNow.get("print") && uiNow.get("print").busy());
+    // Print stays on for a saved printer that is down: printing asks to connect it
+    $("print").disabled = busy || !p || (!up && !(ws.connected && hub.hubUp()));
+    $("status-connect").hidden = !p || !ws.connected || up || !hub.isDown(p);
     if (Date.now() - msgAt < MSG_MS) {
         return;
     }
@@ -1605,6 +1609,52 @@ function refreshPrinterUi() {
         showStatus(`${p.nickname || p.addr}: ${hub.stateText(p.addr)}`, up ? "ok" : "");
     }
 }
+
+// ---- connecting: a saved Classic printer is never paged without the user
+// (hub.js requestConnect: paging one that is off stalls the board's Wi-Fi) ----
+
+function printerName(p) {
+    const m = findModel({ driver: p.driver, id: p.model });
+    return p.nickname || (m && m.name) || p.addr;
+}
+
+hub.setConnectPrompt(async (p) => {
+    try {
+        return await (await use("dialog")).turnOnDialog(printerName(p));
+    } catch {
+        return false;   // use() said why
+    }
+});
+
+/** Connect the current printer (the status line's Connect). */
+async function connectCurrent() {
+    const p = currentPrinter();
+    if (!p) {
+        return false;
+    }
+    try {
+        return await hub.requestConnect(p);
+    } catch (err) {
+        setStatus(`${printerName(p)}: ${err.message || err}`, "err");
+        return false;
+    }
+}
+
+/** For a print: connected, or asked and connected; false when not. */
+async function ensureConnected(p) {
+    if (hub.isUp(p.addr)) {
+        return true;
+    }
+    if (!hub.isDown(p) && hub.stateOf(p.addr).state === "connecting") {
+        return hub.waitConnected(p.addr);
+    }
+    if (!(await connectCurrent())) {
+        return false;
+    }
+    return hub.waitConnected(p.addr);
+}
+
+$("status-connect").addEventListener("click", () => connectCurrent());
 
 let statusTimer = 0;
 function scheduleStatus() {
@@ -1650,12 +1700,21 @@ async function onBoard() {
     setModel(m, { keepMedia: true });
     applyPage({ rescale: switched });
     await hub.refreshStatus();
-    hub.autoConnect();
+    const auto = hub.autoConnect();
     refreshPrinterUi();
-    if (!state.boardReady) {
+    const first = !state.boardReady;
+    state.boardReady = true;
+    if (first && auto === "ask") {
+        // once per page load, after boot: a saved Classic printer is only paged
+        // when the user says it is on (Cancel leaves the status line's Connect)
+        connectCurrent().finally(() => {
+            if (first) {
+                prefetch();
+            }
+        });
+    } else if (first) {
         prefetch();
     }
-    state.boardReady = true;
 }
 hub.onHub(() => refreshPrinterUi());
 

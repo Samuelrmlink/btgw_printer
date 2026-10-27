@@ -135,7 +135,7 @@ export function bindPrinters({ onChange }) {
 
     async function connect(p) {
         showErr("");
-        const done = hub.connect(p).catch((err) => showErr(String(err.message || err)));
+        const done = hub.requestConnect(p).catch((err) => showErr(String(err.message || err)));
         paint();
         await done;
         paint();
@@ -149,13 +149,14 @@ export function bindPrinters({ onChange }) {
         }
     }
 
-    async function use(addr) {
+    /** opts.fresh: the printer was just added from a scan (hub.requestConnect). */
+    async function use(addr, opts) {
         await setCurrentPrinter(addr).catch((err) => showErr(String(err.message || err)));
         paint();
         onChange && onChange({ printerChanged: true });
         const p = findPrinter(addr);
         if (p) {
-            hub.connectIfDown(p).then(() => paint());
+            hub.connectIfDown(p, opts).then(() => paint());
         }
     }
 
@@ -230,7 +231,7 @@ export function bindPrinters({ onChange }) {
             const wasNew = editing.isNew;
             endEdit();
             if (wasNew || !currentPrinterAddr()) {
-                await use(rec.addr);
+                await use(rec.addr, { fresh: wasNew });   // just picked from a scan: it is on
             }
             onChange && onChange({ printerChanged: true });
         } catch (err) {

@@ -112,15 +112,33 @@ input/output cases for the JavaScript port to match.
 | `printer.log` | `{"driver","msg"}` |
 
 Drivers put `"driver"` in every object they emit or list; the hub passes
-them on as `printer.<kind>`. `state` `waiting` means the link dropped and a
-reconnect is due in `retry_ms` (8 s, doubling to 60 s). A Classic driver
+them on as `printer.<kind>`. `state` `waiting` means a retry inside the current
+attempt is due in `retry_ms` (the next PIN, or a busy radio); nelko_tspl no
+longer waits to reconnect after a lost link. A Classic driver
 reports the `pin` and `channel` that worked: save them in the printer's
 config (`printers.json`) and pass that config to `printer.connect`, and the
 next connect tries that PIN first and skips SDP. Put the printer's `model`
 in that config too: a driver with several models takes it from there (else
 from the inquiry name, else its first model, with a `printer.log` line). When a driver registers,
 the hub connects every printer in `printer/printers.json` with that driver
-and `auto_reconnect` not false, passing its whole entry as the config.
+and `auto_reconnect` not false, passing its whole entry as the config,
+except printers whose model's `transport` is `classic`: those wait for the
+user (logged as "waits for the user"). A Classic driver also never
+reconnects by itself: a connect is one attempt (the PIN walk and a busy
+radio aside), and a lost link or an unreachable printer ends it.
+
+**The web app never pages a saved Bluetooth Classic printer by itself**
+(roadmap F9: paging one that is off stalls the gateway's Wi-Fi, parent B4).
+Every connect goes through `web/hub.js` `requestConnect`. For a printer in
+`printers.json` whose model's `transport` is `classic` it first asks "Turn on
+the printer" and sends `printer.connect` only on Connect. At page load the
+current printer (with `auto_reconnect` not false) is connected directly when
+it is BLE, and asked about once, after boot, when it is Classic; Cancel
+leaves a Connect action on the status line. A print with the printer down
+asks the same and continues once it is connected. No prompt for a printer
+being added from a scan, or for one a `printer.found` in this page reported,
+until a `printer.state` `why` says it is lost again ("link lost", "not
+reachable", "stopped retrying").
 
 Driver model caps (`printer.drivers`) carry `presets`, a list of media
 profile ids from `web/presets/media/` (`nelko-pm220-50x30`, `nelko-4x6`,

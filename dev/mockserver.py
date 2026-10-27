@@ -88,7 +88,8 @@ def reset_state():
             "wg": {"configured": True, "connected": True, "confirmed": True, "address": "10.255.255.23",
                    "endpoint": "203.0.113.5", "endpoint_port": 51820, "last_handshake_age_ms": 4000, "rx_bytes": 1000, "tx_bytes": 900},
             "cancel": set(),
-            "late_named": False,   # LATE is in printer.devices once a scan has named it
+            "late_named": False,
+            "connects": [],        # every printer.connect, for the e2e suite   # LATE is in printer.devices once a scan has named it
         })
         STATE["fs"]["printer/mode.json"] = json.dumps({"mode": OPTS["mode"]}).encode()
         STATE["fs"]["cfg/wireguard.json"] = json.dumps({"private_key": "x" * 44, "peer_public_key": "y" * 44, "address": "10.255.255.23",
@@ -154,6 +155,8 @@ def test_op(name, p):
         return {"ok": True}
     if name == "test.jobs":
         return {"jobs": S["jobs"]}
+    if name == "test.connects":
+        return {"connects": S["connects"]}
     if name == "test.set":
         for k in ("fail_next", "job_ms"):
             if k in p:
@@ -203,6 +206,7 @@ def printer_op(name, p):
         addr, drv = p.get("addr"), p.get("driver")
         if not addr or not drv:
             raise ApiError("bad_request", "driver and addr required")
+        S["connects"].append({"driver": drv, "addr": addr})
         st = S["printers"].setdefault(addr, {})
         st.update({"driver": drv, "model": (p.get("config") or {}).get("model", ""), "state": "connecting", "battery": 87})
 

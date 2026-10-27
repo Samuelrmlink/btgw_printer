@@ -26,6 +26,7 @@ test('an old pm220 print.json loads into the dialog, saves per printer × label 
   await expect(page.locator('#status')).toContainText('calibration saved to printer/printers.json');
   await page.goto('/printer/');
   await page.waitForFunction(() => window.btgwPrinter && window.btgwPrinter.state.boardReady);
+  await expect(page.locator('#turn-on')).toBeHidden();   // still connected on the board: nothing to ask
   await page.keyboard.press('Shift+C');
   await expect(page.locator('#cal')).toBeVisible();
   await expectFields(page);

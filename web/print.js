@@ -130,14 +130,14 @@ export function bindPrint(ctx) {
         });
     }
 
-    function ready() {
+    async function ready() {
         const cur = ctx.current();
         if (!cur.printer) {
             ctx.openPrinters();
             throw new Error("pick a printer first");
         }
-        if (!ctx.isConnected(cur.printer.addr)) {
-            throw new Error(`${cur.printer.nickname || cur.printer.addr} is not connected`);
+        if (!ctx.isConnected(cur.printer.addr) && !(ctx.ensureConnected && (await ctx.ensureConnected(cur.printer)))) {
+            throw new Error(`print cancelled: ${cur.printer.nickname || cur.printer.addr} is not connected`);
         }
         if (cur.model.driver !== cur.printer.driver) {
             throw new Error("the label is set up for another printer model");
@@ -151,15 +151,17 @@ export function bindPrint(ctx) {
             ctx.setStatus("a print is already running", "err");
             return false;
         }
+        running = { cancelled: false, jobId: null };   // also while ready() asks to connect
+        ctx.changed && ctx.changed();
         let cur;
         try {
-            cur = ready();
+            cur = await ready();
         } catch (err) {
+            running = null;
+            ctx.changed && ctx.changed();
             ctx.setStatus(String(err.message || err), "err");
             return false;
         }
-        running = { cancelled: false, jobId: null };
-        ctx.changed && ctx.changed();
         const defs = effectiveDefs(cur.objects, cur.vars);
         const varies = defs.some((d) => d.type === "counter") || cur.objects.some((o) => /\{\{\s*n\s*(:[^}]*)?\}\}/.test(o.text || o.payload || ""));
         const cs = counterStore(cur.docName);
@@ -207,8 +209,14 @@ export function bindPrint(ctx) {
         if (running) {
             throw new Error("a print is already running");
         }
-        const cur = ready();
         running = { cancelled: false, jobId: null };
+        let cur;
+        try {
+            cur = await ready();
+        } catch (err) {
+            running = null;
+            throw err;
+        }
         try {
             const job = buildJobBitmap(mono, { ...page, orient: 0 }, cur.model);
             bar("test print · sending", 0);

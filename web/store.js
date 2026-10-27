@@ -64,3 +64,25 @@ export function migratePrinters(j) {
     return { ...j, printers: j.printers.map((p) =>
         (MERGED[p.driver] ? { ...p, driver: "nelko_tspl", model: p.model || MERGED[p.driver] } : p)) };
 }
+
+// ---- connecting a saved Bluetooth Classic printer ------------------------
+// Paging a Classic printer that is switched off stalls the gateway's whole
+// Wi-Fi for about half a minute (parent B4), so the app asks before it pages
+// a saved Classic printer: the user switches it on, then says Connect. Not
+// for BLE, not for one being added from a scan, and not for one a scan in
+// this page has found (it is on), until the driver says it is lost again.
+
+export function isClassic(transport) {
+    return String(transport || "").toLowerCase() === "classic";
+}
+
+/** saved: in printers.json; seen: a scan in this page found it and no
+ *  lostAgain(why) came after. */
+export function askBeforeConnect({ transport, saved, seen = false }) {
+    return isClassic(transport) && !!saved && !seen;
+}
+
+/** A printer.state why that means the printer is gone again (off or away). */
+export function lostAgain(why) {
+    return /link lost|not reachable|stopped retrying/i.test(String(why || ""));
+}

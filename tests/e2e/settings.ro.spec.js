@@ -42,6 +42,7 @@ test('flash read-only: a saved printer and its calibration land on the card and 
 
   await ready(page);
   await expect(page.locator('#printer-name')).toContainText('Desk');
+  await expect(page.locator('#status')).toContainText('Desk: connected');   // still up on the board: no prompt
   await page.keyboard.press('Shift+C');
   await expect(page.locator('#cal-offx')).toHaveValue('-1');
 });
@@ -57,6 +58,7 @@ test('a printers.json on the card is read first, and old driver names load as ne
   });
   await ready(page);
   await expect(page.locator('#printer-name')).toContainText('Tiny');
+  await page.click('#turn-on-ok');
   await expect(page.locator('#status')).toContainText('connected', { timeout: 5000 });
   const st = await op(page, 'printer.status');
   expect(st.printers.find((p) => p.addr === 'AA:BB:CC:00:02:02')).toMatchObject({ driver: 'nelko_tspl', model: 'p21' });

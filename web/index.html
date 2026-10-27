@@ -42,6 +42,7 @@
             <button type="button" id="wifi-settings" title="Network (W)">Network</button>
             <button type="button" id="help-btn" aria-label="Keyboard shortcuts">?</button>
             <span id="status">connecting…</span>
+            <button type="button" id="status-connect" class="chip" hidden title="Connect the printer">Connect</button>
         </div>
         <div id="job-bar" class="job-bar" hidden>
             <span id="job-text"></span>
@@ -378,6 +379,17 @@
                 <button type="button" id="batch-none" tabindex="-1">Select none</button>
                 <button type="button" id="batch-print" class="primary" tabindex="-1">Print selected</button>
                 <button type="button" id="batch-close" tabindex="-1">Close</button>
+            </div>
+        </div>
+    </div>
+    <div id="turn-on" data-overlay hidden>
+        <div class="picker-backdrop"></div>
+        <div class="picker-panel confirm-panel" role="alertdialog" aria-labelledby="turn-on-title" aria-describedby="turn-on-text">
+            <h2 id="turn-on-title">Turn on the printer</h2>
+            <p id="turn-on-text"></p>
+            <div class="picker-actions">
+                <button type="button" id="turn-on-ok" class="primary" tabindex="-1">Connect</button>
+                <button type="button" id="turn-on-cancel" tabindex="-1">Cancel</button>
             </div>
         </div>
     </div>

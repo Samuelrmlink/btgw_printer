@@ -97,3 +97,22 @@ test("saved printers: nelko_pm220 / nelko_p21 load as nelko_tspl with their mode
     assert.equal(migrateDriver("nelko_pm220"), "nelko_tspl");
     assert.equal(migrateDriver("phomemo_d30"), "phomemo_d30");
 });
+
+test("only a saved Classic printer no scan in this page has found is asked about", async () => {
+    const { askBeforeConnect, isClassic, lostAgain } = await import("../../web/store.js");
+    assert.equal(isClassic("classic"), true);
+    assert.equal(isClassic("Classic"), true);
+    for (const t of ["le", "ble", "none", "", undefined]) {
+        assert.equal(isClassic(t), false, String(t));
+    }
+    assert.equal(askBeforeConnect({ transport: "classic", saved: true }), true);
+    assert.equal(askBeforeConnect({ transport: "classic", saved: true, seen: true }), false, "a scan found it: it is on");
+    assert.equal(askBeforeConnect({ transport: "classic", saved: false }), false, "not paired yet: just found");
+    assert.equal(askBeforeConnect({ transport: "ble", saved: true }), false);
+    assert.equal(askBeforeConnect({ transport: "le", saved: true }), false);
+    assert.equal(lostAgain("link lost"), true);
+    assert.equal(lostAgain("not reachable (page timeout)"), true);
+    assert.equal(lostAgain("stopped retrying after 2 attempts"), true);
+    assert.equal(lostAgain(""), false);
+    assert.equal(lostAgain("pairing"), false);
+});

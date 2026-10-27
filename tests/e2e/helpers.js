@@ -53,8 +53,11 @@ export async function reload(page) {
   await page.goto(url);
 }
 
-/** A fresh mock and a fresh page (localStorage cleared). */
-export async function fresh(page, { printer = null } = {}) {
+/** A fresh mock and a fresh page (localStorage cleared). With a printer
+ *  saved as current: a Classic one asks "Turn on the printer" after boot
+ *  (hub.js requestConnect), which this answers with Connect unless
+ *  connect: false; a BLE one connects by itself. */
+export async function fresh(page, { printer = null, connect = true } = {}) {
   await page.goto('/printer/');
   await op(page, 'test.reset');
   await page.evaluate(() => localStorage.clear());
@@ -67,8 +70,16 @@ export async function fresh(page, { printer = null } = {}) {
   await settle(page);
   await page.goto('/printer/');
   await page.waitForFunction(() => window.btgwPrinter && window.btgwPrinter.state.boardReady);
+  if (printer && CLASSIC.has(printer.model)) {
+    await expect(page.locator('#turn-on')).toBeVisible();
+    if (!connect) return;
+    await page.click('#turn-on-ok');
+  }
   if (printer) await expect(page.locator('#status')).toContainText('connected', { timeout: 5000 });
 }
+
+/** The models web/presets/models.json gives transport "classic". */
+export const CLASSIC = new Set(['pm220', 'p21', 'd30']);
 
 export const PL70E = { addr: 'AA:BB:CC:00:01:01', driver: 'nelko_pl70e', model: 'pl70e', nickname: 'Shipping' };
 export const PM220 = { addr: 'AA:BB:CC:00:00:00', driver: 'nelko_tspl', model: 'pm220', nickname: 'Desk' };

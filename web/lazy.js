@@ -37,7 +37,7 @@ export const MODULES = {
     device: ["js/btgw/wsapi", "js/btgw/fs", "lazy"],
     editor: ["raster", "doc"],
     catalog: ["device", "layout", "store", "lazy"],
-    hub: ["device", "catalog"],
+    hub: ["device", "catalog", "store"],
     app: ["device", "editor", "raster", "doc", "layout", "catalog", "hub", "keymap", "numfield", "lazy"],
     // ---- on first use ----
     dialog: ["numfield"],
