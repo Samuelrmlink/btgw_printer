@@ -254,6 +254,30 @@ export async function saveCalibration(addr, media, cal) {
     return path;
 }
 
+/** The label size and orientation last chosen for a saved printer:
+ *  {media: id, orient} or null. */
+export function printerLabel(addr) {
+    const p = addr ? findPrinter(addr) : null;
+    return p && p.media ? { media: p.media, orient: p.orient || 0 } : null;
+}
+
+/** Remember the label size for a saved printer; no write when nothing
+ *  changed. → the path written, or null. */
+export async function savePrinterLabel(addr, media, orient) {
+    const p = findPrinter(addr);
+    if (!p || !media) {
+        return null;
+    }
+    if (p.media === media.id && (p.orient || 0) === (orient || 0)) {
+        return null;
+    }
+    p.media = media.id;
+    p.orient = orient || 0;
+    const path = await store.save(PRINTERS, printers);
+    changed();
+    return path;
+}
+
 /** A JSON-safe, test-friendly reset (tests only). */
 export function _resetForTests() {
     presetDrivers = [];

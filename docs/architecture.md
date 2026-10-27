@@ -47,7 +47,7 @@ from beside itself, then falls back to flash `printer/mode.json`.
 | Path | What |
 |---|---|
 | `printer/` | the app (gzipped assets, not minified) |
-| `printer/printers.json` | saved printer configs |
+| `printer/printers.json` | saved printer configs: per printer its calibration per label size (`calibration[<media id>]`) and the label size and orientation last chosen for it (`media`, `orient`), which come back on a reload or a switch to that printer |
 | `printer/media.json` | user media profiles (presets ship in the app) |
 | `printer/labels/` | saved labels and templates on flash |
 | `sd/printer/labels/` | the same on the SD card (companion, card mounted) |

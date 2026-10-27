@@ -8,7 +8,7 @@ import { fromDocument, readFileText, toDocument } from "./doc.js";
 import { pageFor } from "./layout.js";
 import {
     calibrationFor, currentPrinterAddr, defaultModel, findMedia, findModel, findPrinter, loadPresets,
-    isDriverLive, loadPrinters, loadUserMedia, mediaFor, onCatalog, saveCalibration,
+    isDriverLive, loadPrinters, loadUserMedia, mediaFor, onCatalog, printerLabel, saveCalibration, savePrinterLabel,
 } from "./catalog.js";
 import * as hub from "./hub.js";
 import { serviceDrivers } from "./store.js";
@@ -132,6 +132,7 @@ const state = {
     vars: [],
     picoName: "",
     sessionCal: new Map(),   // "model|media" -> calibration, when no printer is saved
+    fromScratch: false,      // the label came back from this browser's last session
 };
 let page = null;
 let mono = null;
@@ -572,6 +573,30 @@ function setModel(model, { keepMedia = false } = {}) {
             state.orient = m.orient || 0;
         }
     }
+}
+
+/** The current printer's saved label size, when it is still in the library
+ *  and meant for the model → true if it was applied. */
+function usePrinterLabel() {
+    const p = currentPrinter();
+    const saved = p && printerLabel(p.addr);
+    const m = saved && mediaFor(state.model).find((x) => x.id === saved.media);
+    if (!m) {
+        return false;
+    }
+    state.media = m;
+    state.orient = saved.orient;
+    return true;
+}
+
+/** Remember the label size for the current printer (printers.json). */
+function rememberLabel() {
+    const p = currentPrinter();
+    if (!p || !state.media || String(state.media.id).startsWith("doc-")) {
+        return;
+    }
+    savePrinterLabel(p.addr, state.media, state.orient).catch((err) =>
+        setStatus(`label size not saved: ${err.message || err}`, "err"));
 }
 
 function render(objects) {
@@ -1080,12 +1105,14 @@ function onPrintersChanged(o) {
     if (o && o.printerChanged) {
         const p = currentPrinter();
         const m = p && findModel({ driver: p.driver, id: p.model });
-        if (m && (!state.model || m.key !== state.model.key)) {
+        const modelChanged = m && (!state.model || m.key !== state.model.key);
+        const old = state.media && `${state.media.id}|${state.orient}`;
+        if (modelChanged) {
             setModel(m, { keepMedia: true });
-            applyPage({ rescale: true });
-        } else {
-            applyPage();
         }
+        usePrinterLabel();
+        const sizeChanged = (state.media && `${state.media.id}|${state.orient}`) !== old;
+        applyPage({ rescale: modelChanged || sizeChanged });
     }
     refreshPrinterUi();
 }
@@ -1118,10 +1145,12 @@ const BIND = {
             state.orient = m.orient || 0;
             applyPage({ rescale: true });
             histRecord();
+            rememberLabel();
         },
         setOrient: (deg) => {
             state.orient = deg;
             applyPage({ rescale: true });
+            rememberLabel();
         },
     }),
     cal: async () => {
@@ -1763,8 +1792,12 @@ async function onBoard() {
     const p = currentPrinter();
     const m = (p && findModel({ driver: p.driver, id: p.model })) || (state.model && findModel(state.model.key)) || defaultModel();
     const switched = !state.model || m.key !== state.model.key;
+    const before = state.media;
     setModel(m, { keepMedia: true });
-    applyPage({ rescale: switched });
+    // the label left in this browser keeps its size (when the model can use
+    // it); else the printer's own
+    const sized = (!state.fromScratch || state.media !== before) && usePrinterLabel();
+    applyPage({ rescale: switched || sized });
     await hub.refreshStatus();
     const auto = hub.autoConnect();
     refreshPrinterUi();
@@ -1805,6 +1838,7 @@ async function boot() {
     syncAdvanced();
     await loadPresets();
     const d = restoreScratch();
+    state.fromScratch = !!d;
     if (d) {
         loadDocument(d);
     } else {
