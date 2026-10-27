@@ -404,3 +404,7 @@ Needed: Classic paging (and inquiry) must leave Wi-Fi airtime, the same coexiste
 Our side meanwhile: nelko_tspl stops retrying after two attempts in a row that find no printer (`UNREACHABLE_MAX`); a connect op starts over.
 
 **Done when:** during a connect attempt to a switched-off Classic printer, the PC's 1-per-second requests to the board keep answering within 1 s.
+
+### B5 (Must): removing a PEX module needs free PEX pool memory (2026-10-27)
+
+`pex.uninstall` failed with `PEX pool full (index update)` on the bench board until a reboot: every partition change builds the new index in a 3 KB buffer borrowed from the pool's scratch gap. Details, source references and suggested fixes: [parent-issues/B5-pex-index-update-needs-pool.md](parent-issues/B5-pex-index-update-needs-pool.md).
