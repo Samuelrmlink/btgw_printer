@@ -39,6 +39,7 @@ These are part of the design. They are not tasks.
   - Needs: F2 for loading from the card (or `tools/serve_dist.py` meanwhile). On the bench board printer_hub and the driver are installed from `sd:/apps/printer-pex/` and started by op after each boot (parent B3 stops autostart; module memory is parent R11).
   - Done when: from the app, a calibrated 50×30 label with text, QR and barcode prints on the PM220, placed where the old pm220 app put it; a 3-row CSV batch prints; then a 4×6 label prints on the PL70e-BT, and a 3×1 when that roll is in.
   - 2026-10-27: PM220 printed a 384×239 test page through printer_hub + nelko_tspl from tools/bench_print.py (job file on the card). The owner confirmed the label.
+  - 2026-10-27: from the app on the card (`/sd/apps/printer/`, lazy build, peak 2 requests): the saved PM220 auto-connected and a 50×30 label with text, QR and barcode printed ("printed 1 label"). Sharp, inside the label, placed as in the preview (photo from the owner). Still open: a deliberate layout compared with the old pm220 app, a CSV batch, then the PL70e-BT.
 
 - [ ] **F2 — Lazy loading**
   - Area: web.
@@ -71,6 +72,17 @@ These are part of the design. They are not tasks.
   - Why: The keymap was ported from `~/Projects/pm220-pico2w/web` (n/N/Space browse, m/r/d/Del/Esc/q, hjkl/HJKL nudge, Tab order, help overlay, dialog navigation, number-field steps) but never checked key by key against the old app. It may be refined after that.
   - Needs: a table in `docs/keys.md`: every binding in the old app (from its source, and by trying it in the old app under the mock), what ours does, and the difference. Fix the ones that differ unless the difference is deliberate (new dialogs, the clash fixes listed in docs/notes/web-port.md); write the deliberate ones down. An e2e per row of the table where it can be tested.
   - Done when: the table is written, every row matches or has a reason, and the e2e covers it. Refinements after that are new items.
+
+- [ ] **F9 — Don't knock the board off Wi-Fi when a printer is off**
+  - Area: web, driver, parent.
+  - Why: Paging a switched-off Classic printer stalls the gateway's Wi-Fi for ~35 s per attempt (parent B4). The app auto-connects to the saved printer on every page load, so opening the app with the printer off makes the board unreachable, the app's own loading included.
+  - Needs: nelko_tspl already stops after two unreachable attempts. The app: auto-connect once per page load at most, not while the page is still loading modules, and never again in the background after "not reachable"; a clear "printer is off? Connect" action instead. Revisit once B4 is fixed.
+  - Done when: e2e with a mock printer that is off: one connect attempt after boot finished, none after, and the status offers Connect.
+
+- [ ] **F10 — New objects don't land on top of each other**
+  - Area: web.
+  - Why: Adding a text box, a QR code and a barcode in a row puts all three at the same spot (seen on the first browser print). Check what pm220_rp2_webapp did and match it, or place each new object in free space inside the safe area.
+  - Done when: e2e: three objects added in a row don't overlap on a 50×30 label.
 
 ## Later
 
