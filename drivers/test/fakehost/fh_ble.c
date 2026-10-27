@@ -28,6 +28,7 @@ struct fh_ble_peer {
     op_t q[OPQ];
     int nq;
     int stall;
+    int drop_done;           /* write-done events to lose (the gateway's event ring drops the oldest when full) */
     uint8_t val[FH_BLE_CHR_MAX][QDATA];
     uint16_t vlen[FH_BLE_CHR_MAX];
     fh_ble_stats_t st;
@@ -109,6 +110,7 @@ static void link_down(fh_ble_peer_t *p) {
 }
 void fh_ble_peer_disconnect(fh_ble_peer_t *p) { if (p) { link_down(p); } }
 void fh_ble_peer_stall(fh_ble_peer_t *p, int on) { if (p) { p->stall = on; } }
+void fh_ble_peer_drop_write_done(fh_ble_peer_t *p, int n) { if (p) { p->drop_done = n; } }
 const fh_ble_stats_t *fh_ble_peer_stats(fh_ble_peer_t *p) { return p ? &p->st : NULL; }
 int fh_ble_listeners(void) { return nlis(); }
 
@@ -124,7 +126,9 @@ static void run_ops(fh_ble_peer_t *p) {
             p->st.writes++;
             p->st.bytes += o.len;
             if (p->c.on_write) { p->c.on_write(p, o.chr, o.d, o.len, o.with_resp, p->c.ctx); }
-            if (o.want_done) { push(PEX_BT_WRITE, p->addr, o.chr, NULL, 0, 0); }
+            if (o.want_done) {
+                if (p->drop_done > 0) { p->drop_done--; } else { push(PEX_BT_WRITE, p->addr, o.chr, NULL, 0, 0); }
+            }
         } else if (o.kind == PEX_BT_READ) {
             push(PEX_BT_READ, p->addr, o.chr, p->val[o.chr], p->vlen[o.chr], 0);
         } else {

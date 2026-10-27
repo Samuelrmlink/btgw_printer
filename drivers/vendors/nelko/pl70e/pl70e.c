@@ -24,6 +24,11 @@
 #define QUERY_TIMEOUT_MS 1500
 #define DONE_TIMEOUT_MS 60000     /* after the last byte: wait this long for READY */
 #define SCAN_FOR_CONNECT_MS 5000
+/* The gateway reports every write's outcome within 5 s (its GATT op timeout),
+ * but its 8-deep module event ring drops the oldest event when it overflows,
+ * without telling us (parent-requirements B6). Writes still counted in flight
+ * with no write event for this long are taken as done. */
+#define WRITE_LOST_MS 6000
 #define TX_CAP 512
 #define INFLIGHT_MAX 3            /* the gateway queues 4 GATT ops per link */
 
@@ -43,6 +48,8 @@ static int s_mtu;
 /* BLE event flags, set by on_bt, consumed by tick */
 static volatile uint8_t s_ev_up, s_ev_ready, s_ev_fail, s_ev_down;
 static int s_inflight;
+static uint32_t s_write_ev_at;     /* last PEX_BT_WRITE, or the last write sent */
+static uint32_t s_writes_lost;     /* write events given up on */
 static int s_write_err;
 
 /* printer status */
@@ -140,6 +147,7 @@ static void on_bt(void *arg, const pex_bt_event_t *ev) {
     case PEX_BT_LINK_DOWN: s_ev_down = 1; break;
     case PEX_BT_WRITE:
         if (s_inflight > 0) { s_inflight--; }
+        s_write_ev_at = pex_ms();
         if (ev->len >= 2 && ev->data && (ev->data[0] | ev->data[1])) { s_write_err = 1; }
         break;
     case PEX_BT_NOTIFY:
@@ -185,6 +193,7 @@ static int pump_one(void) {
         s_write_err = 1;
         return 0;
     }
+    if (!s_inflight) { s_write_ev_at = pex_ms(); }
     s_inflight++;
     s_tx_tail += n;
     s_sent_total += n;
@@ -234,6 +243,12 @@ static void start_connect(void) {
 }
 
 static void tick_job(uint32_t now) {
+    if (s_inflight > 0 && now - s_write_ev_at > WRITE_LOST_MS) {
+        s_writes_lost += (uint32_t)s_inflight;
+        pex_log(PEX_LOG_WARN, "pl70e: %d write event(s) never came; carrying on", s_inflight);
+        s_inflight = 0;
+        s_write_ev_at = now;
+    }
     if (s_job_st == JOB_SEND && s_tail_queued && tx_used() == 0 && s_inflight == 0) {
         s_job_st = JOB_WAIT;
         s_wait_t0 = now;
@@ -414,8 +429,13 @@ static int drv_status(const char *addr, char *out, size_t cap) {
     if (k < 0 || (size_t)(n + k) >= cap) { return PEX_ENOMEM; }
     n += k;
     if (s_job_st != JOB_NONE) {
-        k = pex_snprintf(out + n, cap - (size_t)n, ",\"sent\":%u,\"total\":%u",
-                         (unsigned)s_sent_total, (unsigned)s_job_bytes);
+        k = pex_snprintf(out + n, cap - (size_t)n, ",\"sent\":%u,\"total\":%u,\"inflight\":%d,\"job\":%u",
+                         (unsigned)s_sent_total, (unsigned)s_job_bytes, s_inflight, (unsigned)s_job_st);
+        if (k < 0 || (size_t)(n + k) >= cap) { return PEX_ENOMEM; }
+        n += k;
+    }
+    if (s_writes_lost) {
+        k = pex_snprintf(out + n, cap - (size_t)n, ",\"writes_lost\":%u", (unsigned)s_writes_lost);
         if (k < 0 || (size_t)(n + k) >= cap) { return PEX_ENOMEM; }
         n += k;
     }

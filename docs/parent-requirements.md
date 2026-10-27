@@ -413,3 +413,20 @@ Our side meanwhile: nelko_tspl stops retrying after two attempts in a row that f
 ### B5 (Must): removing a PEX module needs free PEX pool memory (2026-10-27)
 
 `pex.uninstall` failed with `PEX pool full (index update)` on the bench board until a reboot: every partition change builds the new index in a 3 KB buffer borrowed from the pool's scratch gap. Details, source references and suggested fixes: [parent-issues/B5-pex-index-update-needs-pool.md](parent-issues/B5-pex-index-update-needs-pool.md).
+
+### B6 (Should): the module BLE event ring drops events silently (2026-10-27)
+
+`src/pex/pex_gw_bt.c`: BLE events for PEX modules (write completions, notifications, link changes) go into an 8-entry ring (`QDEPTH 8`) shared by every listener, filled from BTstack context and drained by `pex_gw_bt_poll()`. When it is full, `le_pex_event()` drops the **oldest** event (`s_qtail++; s_dropped++`). No module is told: `s_dropped` isn't exposed, and nothing marks the gap.
+
+What we saw on the bench board (parent dev with the B5 fix): a 3x1 test print to the PL70e-BT (15,719 bytes, write-with-response, at most 3 writes in flight) stopped at `sent == total` and the driver stayed "printing"; the hub gave up after 120 s. The firmware itself reports every write's outcome within its 5 s op timeout (`op_pump` → `write_done(..., LE_WRITE_TIMEOUT)`), so a write-done that never reached the module is most likely a dropped ring entry. Not proven: there's no counter to read.
+
+A lost write-done or link-down is worse than a late one: a driver that counts writes in flight waits forever. A lost notification loses printer status.
+
+Needed:
+- never drop a write-done or link event silently: make the ring bigger, or drop notifications before completions, or coalesce;
+- when anything is dropped, deliver an event that says so (e.g. `PEX_BT_OVERFLOW` with the count) to each listener, and count drops in `pex.list` / `sys.info`;
+- maybe a per-module ring, so one busy module can't push out another's events.
+
+Our side: nelko_pl70e treats writes still in flight with no write event for 6 s as done (`WRITE_LOST_MS`), and reports `inflight` and `writes_lost` in its status.
+
+**Done when:** a module can tell that an event was dropped, and a burst of notifications can't push out a write completion.

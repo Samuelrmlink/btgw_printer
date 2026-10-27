@@ -49,6 +49,9 @@ void fh_ble_peer_notify(fh_ble_peer_t *p, int chr, const void *data, size_t n);
 void fh_ble_peer_set_value(fh_ble_peer_t *p, int chr, const void *data, size_t n);  /* for reads */
 void fh_ble_peer_disconnect(fh_ble_peer_t *p);   /* link loss */
 void fh_ble_peer_stall(fh_ble_peer_t *p, int on);   /* ops stop completing */
+/* lose the next n write-done events, as the gateway's 8-deep module event
+ * ring does when it overflows (it drops the oldest, silently) */
+void fh_ble_peer_drop_write_done(fh_ble_peer_t *p, int n);
 
 typedef struct {
     int connects;

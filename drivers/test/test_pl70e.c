@@ -398,6 +398,31 @@ static void t_silent_printer_times_out_ok(void) {
     free(page);
 }
 
+/* The gateway's module event ring drops the oldest event when it overflows,
+ * silently (parent B6). A lost write-done must not leave the job "printing"
+ * for ever: on the bench a 3x1 job sat at sent == total until the hub gave
+ * up after 120 s. */
+static void t_lost_write_event(void) {
+    setup(1, 185);
+    connect_printer();
+    fh_run(200);
+    prn_job_t j;
+    fill_job(&j, 76, 203);
+    uint8_t *page = make_page(76, 203);
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    fh_ble_peer_drop_write_done(S.p, 1);
+    CHECK_EQ(feed_all(page, 76 * 203, 76), 0);
+    CHECK_EQ(drv(PRN_DRV_JOB_END, 0, 0, 0), PEX_OK);
+    CHECK(fh_run_until(got_done, NULL, 30000));
+    CHECK_EQ(s_done_outcome, PRN_JOB_OK);
+    CHECK(fh_log_has("write event(s) never came"));
+    CHECK(S.page && S.page_n == (size_t)76 * 203 && !memcmp(S.page, page, S.page_n));
+    char st[400];
+    CHECK(drv(PRN_DRV_STATUS, 0, (uint32_t)st, sizeof st) > 0);
+    CHECK_HAS(st, "\"writes_lost\":1");
+    free(page);
+}
+
 static void t_stop_releases(void) {
     setup(1, 185);
     connect_printer();
@@ -459,6 +484,7 @@ int main(void) {
     RUN(t_cancel_pads_bitmap);
     RUN(t_link_loss_fails_job_and_reconnects);
     RUN(t_silent_printer_times_out_ok);
+    RUN(t_lost_write_event);
     RUN(t_stop_releases);
     RUN(t_print_through_real_hub);
     T_DONE();
