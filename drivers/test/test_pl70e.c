@@ -55,7 +55,7 @@ typedef struct {
     size_t bmp_left;
     uint8_t *bmp;
     size_t bmp_n;
-    int status;              /* reply to READSTA: 0 paper, 1 no paper, 2 lid, -1 silent */
+    int status;              /* reply to READSTA: 0 paper, 1 no paper, 2 lid, 3 unknown word, -1 silent */
     int queries;
     size_t bytes;
     fh_ble_peer_t *p;
@@ -71,6 +71,7 @@ static void sim_line(const char *l) {
         if (S.status == 0) { sim_reply("READSTA PAPER,\r\n"); }
         if (S.status == 1) { sim_reply("READSTA NOPAPER,\r\n"); }
         if (S.status == 2) { sim_reply("READSTA LIBOPEN,\r\n"); }
+        if (S.status == 3) { sim_reply("READSTA BUSY,\r\n"); }   /* a value the driver doesn't know */
     } else if (!strncmp(l, "SIZE ", 5)) {
         snprintf(S.size, sizeof S.size, "%s", l + 5);
     } else if (!strncmp(l, "GAP ", 4)) {
@@ -383,7 +384,7 @@ static void t_link_loss_fails_job_and_reconnects(void) {
     free(page);
 }
 
-static void t_silent_printer_times_out_ok(void) {
+static void t_silent_printer_fails_the_job(void) {
     setup(1, 185);
     connect_printer();
     fh_run(200);
@@ -394,10 +395,55 @@ static void t_silent_printer_times_out_ok(void) {
     CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
     CHECK_EQ(feed_all(page, 104 * 20, 104), 0);
     CHECK_EQ(drv(PRN_DRV_JOB_END, 0, 0, 0), PEX_OK);
+    CHECK(fh_run_until(got_done, NULL, 35000));
+    CHECK_EQ(s_done_outcome, PRN_JOB_FAILED);
+    CHECK_HAS(s_done_msg, "isn't answering");
+    free(page);
+}
+
+/* A printer that answers READSTA but never says ready again: the job is
+ * taken as printed after DONE_TIMEOUT_MS, as before. */
+static void t_busy_printer_times_out_ok(void) {
+    setup(1, 185);
+    connect_printer();
+    fh_run(200);
+    prn_job_t j;
+    fill_job(&j, 104, 20);
+    uint8_t *page = make_page(104, 20);
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(feed_all(page, 104 * 20, 104), 0);
+    S.status = 3;            /* answers, but with a state that is neither ready nor an error */
+    CHECK_EQ(drv(PRN_DRV_JOB_END, 0, 0, 0), PEX_OK);
     CHECK(fh_run_until(got_done, NULL, 70000));
     CHECK_EQ(s_done_outcome, PRN_JOB_OK);
     CHECK_HAS(s_done_msg, "did not confirm");
     free(page);
+}
+
+/* Gone quiet before a job (like the bench unit after its paper was
+ * reloaded): the status says so and a job is refused, not sent. */
+static void t_quiet_printer_refuses_a_job(void) {
+    setup(1, 185);
+    connect_printer();
+    fh_run(200);
+    S.status = -1;
+    fh_run(20000);           /* a few polls go unanswered */
+    char st[512];
+    CHECK(drv(PRN_DRV_STATUS, 0, (uint32_t)st, sizeof st) > 0);
+    CHECK_HAS(st, "\"unanswered\":");
+    CHECK_HAS(st, "\"quiet_ms\":");
+    prn_job_t j;
+    fill_job(&j, 104, 10);
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), PRN_DRV_ENOTREADY);
+    /* it answers again: printable again */
+    S.status = 0;
+    fh_run(8000);
+    CHECK(drv(PRN_DRV_STATUS, 0, (uint32_t)st, sizeof st) > 0);
+    CHECK(!strstr(st, "unanswered"));
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(drv(PRN_DRV_CANCEL, 0, 0, 0), PEX_OK);
+    CHECK(fh_run_until(got_done, NULL, 10000));
+    fh_run(2000);
 }
 
 /* The gateway's module event ring drops the oldest event when it overflows,
@@ -524,7 +570,9 @@ int main(void) {
     RUN(t_print_refused_no_paper);
     RUN(t_cancel_pads_bitmap);
     RUN(t_link_loss_fails_job_and_reconnects);
-    RUN(t_silent_printer_times_out_ok);
+    RUN(t_silent_printer_fails_the_job);
+    RUN(t_busy_printer_times_out_ok);
+    RUN(t_quiet_printer_refuses_a_job);
     RUN(t_lost_write_event);
     RUN(t_stop_releases);
     RUN(t_print_through_real_hub);
