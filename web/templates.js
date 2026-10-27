@@ -131,10 +131,6 @@ export function bindTemplates(ctx) {
     }
 
     $("vars-close").addEventListener("click", () => varsDlg.close());
-    $("vars-btn").addEventListener("click", () => {
-        paintVars();
-        varsDlg.open();
-    });
 
     // ---- print-time prompt ----
     let promptResolve = null;
@@ -402,7 +398,6 @@ export function bindTemplates(ctx) {
         parse();
         batchDlg.open();
     }
-    $("batch-btn").addEventListener("click", () => openBatch());
 
     return {
         promptValues,

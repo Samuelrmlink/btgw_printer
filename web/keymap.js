@@ -63,6 +63,8 @@ export const KEYMAP = [
     { ctx: "dialog", keys: ["Enter", "Space"], action: "activate", label: "Activate", section: "Dialogs" },
     { ctx: "picker", keys: ["[", "]"], action: "store", label: "Open/Save: Flash ⇄ SD card", section: "Dialogs" },
     { ctx: "cal", keys: ["Ctrl+S"], action: "save", label: "Calibrate: save", section: "Dialogs" },
+    { ctx: "cal", keys: ["Ctrl+O"], action: "loadFile", label: "Calibrate: load file", section: "Dialogs" },
+    { ctx: "cal", keys: ["Ctrl+Shift+S"], action: "saveFile", label: "Calibrate: save file", section: "Dialogs" },
     { ctx: "wifi", keys: ["Ctrl+S"], action: "save", label: "Network: save", section: "Dialogs" },
     { ctx: "printers", keys: ["s"], action: "scan", label: "Printers: scan", section: "Dialogs" },
     { ctx: "media", keys: ["+"], action: "new", label: "Label size: new", section: "Dialogs" },

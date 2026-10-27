@@ -1,33 +1,22 @@
 /** BTGW Printer: the label editor (ported from pm220_rp2_webapp's app.js) on
  * bluetooth_rp2_webapp, for any printer a driver module supports. */
 
-import { connect as connectDevice, on, readJsonOr, refreshSd, whenInfo, ws, deviceLabel, sdAvailable } from "./device.js";
+import { connect as connectDevice, fs, on, readJsonOr, refreshSd, whenInfo, ws, deviceLabel, sdAvailable } from "./device.js";
 import { Editor, defaultBarcode, defaultImage, defaultQr, defaultText } from "./editor.js";
 import { boxOverflows, rasterize, rotateSwapsAxes } from "./raster.js";
 import { fromDocument, readFileText, toDocument } from "./doc.js";
-import { bindPicker } from "./files.js";
-import { bindNetwork } from "./network.js";
-import { bindCalibrate, testFrameMono } from "./cal.js";
-import { code128Error } from "./barcode.js";
-import { qrError } from "./qr.js";
-import { importImageFile } from "./image.js";
 import { pageFor } from "./layout.js";
 import {
     calibrationFor, currentPrinterAddr, defaultModel, findMedia, findModel, findPrinter, loadPresets,
     loadPrinters, loadUserMedia, mediaFor, onCatalog, saveCalibration,
 } from "./catalog.js";
-import { bindPrinters } from "./printers.js";
-import { bindMedia } from "./media.js";
-import { bindTemplates } from "./templates.js";
-import { bindPrint } from "./print.js";
-import { anyDialogOpen } from "./dialog.js";
+import * as hub from "./hub.js";
 import { actionFor, helpHtml } from "./keymap.js";
 import { isNumField, parseIntValue, setBounds, stepNumField, wrapNumSpins, bindSpinHolds } from "./numfield.js";
-import { effectiveDefs, fillObjects, hasVars, resolveValues } from "./vars.js";
-import { counterStore } from "./templates.js";
-import "./barcode.js";
-import "./qr.js";
-import "./image.js";
+// Everything else loads on first use, or one module at a time once the page
+// is idle (lazy.js): the dialogs, printing, templates, and the QR / barcode /
+// image drawers.
+import { fetchRetry, load, loaded, prefetch } from "./lazy.js";
 
 const SCALE_MAX = 2;
 const STORE = "btgw-printer.editor.v1";
@@ -450,8 +439,9 @@ function helpMove(dx, dy) {
     paintHelpNav();
 }
 
+/** Any dialog up (every one is a [data-overlay]; dialog.js loads with the first). */
 function overlayOpen() {
-    return anyDialogOpen();
+    return [...document.querySelectorAll("[data-overlay]")].some((el) => !el.hidden);
 }
 
 function updateStageKeys() {
@@ -588,10 +578,37 @@ function render(objects) {
     return r.mono;
 }
 
+// The drawers for object types other than text register themselves when
+// their module loads; until then a box draws as text, then repaints.
+const DRAWERS = { qr: "qr", barcode1d: "barcode", image: "image" };
+
+const drawerLoads = new Map();   // module -> promise; a failed one is retried only when printing
+
+function needDrawers(objects, retry = false) {
+    const want = new Set(objects.map((b) => DRAWERS[b.type]).filter((n) => n && !loaded(n)));
+    return Promise.all([...want].map((n) => {
+        if (!drawerLoads.has(n) || (retry && drawerLoads.get(n).failed)) {
+            const p = use(n).then(() => {
+                paint();
+                const box = editor.selected();
+                if (box && DRAWERS[box.type] === n) {
+                    fillForm();
+                }
+            });
+            p.catch(() => {
+                p.failed = true;
+            });
+            drawerLoads.set(n, p);
+        }
+        return drawerLoads.get(n);
+    }));
+}
+
 function paint() {
     if (!page) {
         return;
     }
+    needDrawers(editor.boxes).catch(() => {});
     mono = render(editor.boxes);
     const w = page.width_dots;
     const h = page.height_dots;
@@ -732,10 +749,10 @@ function payloadWarning(box) {
         return "";
     }
     if (box.type === "qr") {
-        return qrError(box.payload);
+        return loaded("qr") ? loaded("qr").qrError(box.payload) : "";
     }
     if (box.type === "barcode1d") {
-        return code128Error(box.payload);
+        return loaded("barcode") ? loaded("barcode").code128Error(box.payload) : "";
     }
     return "";
 }
@@ -988,6 +1005,7 @@ $("image-file").addEventListener("change", async (e) => {
         return;
     }
     try {
+        const { importImageFile } = await use("image");
         const { png } = await importImageFile(file, () => paint(), Math.max(page.width_dots, page.height_dots));
         const sel = editor.selected();
         if (sel && sel.type === "image") {
@@ -1013,25 +1031,34 @@ $("obj-next").addEventListener("click", () => editor.cyclePreview(1));
 $("obj-prev").addEventListener("click", () => editor.cyclePreview(-1));
 $("obj-select").addEventListener("click", () => editor.confirmPreview());
 
-// ---- dialogs ----
-let picoStore = "flash";
-const picker = bindPicker({
-    getDoc: () => scratchDoc(),
-    loadDoc: (d) => {
-        loadDocument(d);
-        histReset();
-    },
-    picoName: () => state.picoName,
-    setPicoName: (name, store) => {
-        state.picoName = name;
-        if (store) {
-            picoStore = store;
+// ---- dialogs and printing: loaded on first use (lazy.js) ----
+
+/** load(name), saying "loading…" on the status line when it takes a while
+ *  and what failed when it does. */
+function use(name) {
+    if (loaded(name)) {
+        return Promise.resolve(loaded(name));
+    }
+    const el = $("status");
+    let prev = null;
+    const slow = setTimeout(() => {
+        prev = [el.textContent, el.className];
+        showStatus("loading…", "");
+    }, 150);
+    return load(name).then((m) => {
+        clearTimeout(slow);
+        if (prev && el.textContent === "loading…") {
+            showStatus(...prev);
         }
-        document.title = name ? `${name} · BTGW Printer` : "BTGW Printer";
-    },
-    setStatus,
-});
-const netUi = bindNetwork({ setStatus });
+        return m;
+    }, (err) => {
+        clearTimeout(slow);
+        setStatus(String(err.message || err), "err");
+        throw err;
+    });
+}
+
+let picoStore = "flash";
 
 function current() {
     const printer = currentPrinter();
@@ -1048,81 +1075,129 @@ function current() {
     };
 }
 
-const printersUi = bindPrinters({
-    setStatus,
-    onChange: (o) => {
-        if (o && o.printerChanged) {
-            const p = currentPrinter();
-            const m = p && findModel({ driver: p.driver, id: p.model });
-            if (m && (!state.model || m.key !== state.model.key)) {
-                setModel(m, { keepMedia: true });
-                applyPage({ rescale: true });
-            } else {
-                applyPage();
-            }
-        }
-        refreshPrinterUi();
-    },
-});
-const mediaUi = bindMedia({
-    current,
-    setStatus,
-    choose: (m) => {
-        state.media = m;
-        state.orient = m.orient || 0;
-        applyPage({ rescale: true });
-        histRecord();
-    },
-    setOrient: (deg) => {
-        state.orient = deg;
-        applyPage({ rescale: true });
-    },
-});
-const calUi = bindCalibrate({
-    setStatus,
-    current,
-    loadCal,
-    saveCal: async (addr, media, cal) => {
-        if (addr && findPrinter(addr)) {
-            await saveCalibration(addr, media, cal);
+function onPrintersChanged(o) {
+    if (o && o.printerChanged) {
+        const p = currentPrinter();
+        const m = p && findModel({ driver: p.driver, id: p.model });
+        if (m && (!state.model || m.key !== state.model.key)) {
+            setModel(m, { keepMedia: true });
+            applyPage({ rescale: true });
         } else {
-            state.sessionCal.set(calKey(state.model, media), cal);
+            applyPage();
         }
-    },
-    applied: () => applyPage(),
-    testPrint: async (cal) => {
-        const pg = pageFor(state.model, state.media, cal, 0);
-        await printer.printHeadMono(testFrameMono(pg.geo, pg.cal), pg);
-    },
-});
-const templ = bindTemplates({
-    objects: () => editor.boxes,
-    vars: () => state.vars,
-    setVars: (defs) => {
-        state.vars = defs;
-        saveScratch();
-    },
-    docName: () => state.picoName,
-    setStatus,
-    printLabels: (list) => printer.printLabels(list),
-    renderPreview: (canvas, values, index) => renderPreview(canvas, values, index),
-});
-const printer = bindPrint({
-    current,
-    render,
-    setStatus,
-    isConnected: (addr) => {
-        const st = printersUi.stateOf(addr).state;
-        return st === "connected" || st === "printing" || st === "idle";
-    },
-    openPrinters: () => printersUi.open(),
-    changed: () => refreshPrinterUi(),
-});
+    }
+    refreshPrinterUi();
+}
 
+/** Each dialog's module and how it is bound to the page, once. */
+const BIND = {
+    picker: async () => (await use("files")).bindPicker({
+        getDoc: () => scratchDoc(),
+        loadDoc: (d) => {
+            loadDocument(d);
+            histReset();
+        },
+        picoName: () => state.picoName,
+        setPicoName: (name, store) => {
+            state.picoName = name;
+            if (store) {
+                picoStore = store;
+            }
+            document.title = name ? `${name} · BTGW Printer` : "BTGW Printer";
+        },
+        setStatus,
+    }),
+    network: async () => (await use("network")).bindNetwork({ setStatus }),
+    printers: async () => (await use("printers")).bindPrinters({ onChange: onPrintersChanged }),
+    media: async () => (await use("media")).bindMedia({
+        current,
+        setStatus,
+        choose: (m) => {
+            state.media = m;
+            state.orient = m.orient || 0;
+            applyPage({ rescale: true });
+            histRecord();
+        },
+        setOrient: (deg) => {
+            state.orient = deg;
+            applyPage({ rescale: true });
+        },
+    }),
+    cal: async () => {
+        const { bindCalibrate, testFrameMono } = await use("cal");
+        return bindCalibrate({
+            setStatus,
+            current,
+            loadCal,
+            saveCal: async (addr, media, cal) => {
+                if (addr && findPrinter(addr)) {
+                    return saveCalibration(addr, media, cal);
+                }
+                state.sessionCal.set(calKey(state.model, media), cal);
+                return null;
+            },
+            applied: () => applyPage(),
+            testPrint: async (cal) => {
+                const pg = pageFor(state.model, state.media, cal, 0);
+                await (await ui("print")).printHeadMono(testFrameMono(pg.geo, pg.cal), pg);
+            },
+        });
+    },
+    templates: async () => (await use("templates")).bindTemplates({
+        objects: () => editor.boxes,
+        vars: () => state.vars,
+        setVars: (defs) => {
+            state.vars = defs;
+            saveScratch();
+        },
+        docName: () => state.picoName,
+        setStatus,
+        printLabels: async (list) => (await ui("print")).printLabels(list),
+        renderPreview: (canvas, values, index) => renderPreview(canvas, values, index),
+    }),
+    print: async () => (await use("print")).bindPrint({
+        current,
+        render,
+        setStatus,
+        isConnected: (addr) => hub.isUp(addr),
+        openPrinters: () => openUi("printers", (u) => u.open()),
+        changed: () => refreshPrinterUi(),
+    }),
+};
+const bound = new Map();   // name -> promise of the bound dialog
+const uiNow = new Map();   // name -> the bound dialog, once it is
+
+function ui(name) {
+    if (!bound.has(name)) {
+        const p = BIND[name]().then((u) => {
+            uiNow.set(name, u);
+            return u;
+        });
+        bound.set(name, p);
+        p.catch(() => bound.delete(name));
+    }
+    return bound.get(name);
+}
+
+/** fn(dialog) once it is loaded; a load failure is on the status line already. */
+function openUi(name, fn) {
+    return ui(name).then(fn, () => null);
+}
+
+// The buttons that open a dialog (each module binds its own buttons inside it).
+$("open").addEventListener("click", () => openUi("picker", (u) => u.open("open")));
+$("save").addEventListener("click", () => openUi("picker", (u) => u.open("save")));
+$("printer-btn").addEventListener("click", () => openUi("printers", (u) => u.open()));
+$("media-btn").addEventListener("click", () => openUi("media", (u) => u.open()));
+$("calibrate").addEventListener("click", () => openUi("cal", (u) => u.open()));
+$("wifi-settings").addEventListener("click", () => openUi("network", (u) => u.open()));
+$("vars-btn").addEventListener("click", () => openUi("templates", (u) => u.openVars()));
+$("batch-btn").addEventListener("click", () => openUi("templates", (u) => u.openBatch()));
 
 function renderPreview(canvas, values, index) {
+    const { effectiveDefs, fillObjects, resolveValues } = loaded("vars");
     const defs = effectiveDefs(editor.boxes, state.vars);
-    const r = resolveValues(defs, values, index, { counters: counterStore(state.picoName).get() });
+    const r = resolveValues(defs, values, index, { counters: loaded("templates").counterStore(state.picoName).get() });
     const m = render(fillObjects(editor.boxes, r));
     canvas.width = m.w;
     canvas.height = m.h;
@@ -1137,11 +1212,22 @@ function renderPreview(canvas, values, index) {
 }
 
 async function sendPrint() {
+    const now = uiNow.get("print");
+    if (now && now.busy()) {
+        return;
+    }
+    let printer;
+    try {
+        printer = await ui("print");
+        await needDrawers(editor.boxes, true);
+    } catch {
+        return;   // use() said why
+    }
     if (printer.busy()) {
         return;
     }
-    if (hasVars(editor.boxes)) {
-        const r = await templ.promptValues();
+    if (loaded("vars").hasVars(editor.boxes)) {
+        const r = await openUi("templates", (t) => t.promptValues());
         if (!r) {
             return;
         }
@@ -1154,14 +1240,14 @@ async function sendPrint() {
 
 $("print").addEventListener("click", () => sendPrint());
 $("mode-switch").addEventListener("click", () => {
-    location.href = "/";
+    location.href = fs.apiUrl("/");   // the board's own UI, also when this page is served elsewhere (?host=)
 });
 
 $("file").addEventListener("change", async (e) => {
     const file = e.target.files && e.target.files[0];
     e.target.value = "";
-    if (picker && picker.close) {
-        picker.close();
+    if (uiNow.get("picker")) {
+        uiNow.get("picker").close();
     }
     if (!file) {
         return;
@@ -1181,38 +1267,34 @@ $("file").addEventListener("change", async (e) => {
 function runAction(action) {
     switch (action) {
         case "open":
-            picker.open("open");
+            openUi("picker", (u) => u.open("open"));
             return true;
         case "save":
-            if (!state.picoName) {
-                picker.open("save");
-            } else {
-                picker.saveCurrent();
-            }
+            openUi("picker", (u) => (state.picoName ? u.saveCurrent() : u.open("save")));
             return true;
         case "saveAs":
-            picker.open("save");
+            openUi("picker", (u) => u.open("save"));
             return true;
         case "print":
             sendPrint();
             return true;
         case "batch":
-            templ.openBatch();
+            openUi("templates", (u) => u.openBatch());
             return true;
         case "printers":
-            printersUi.open();
+            openUi("printers", (u) => u.open());
             return true;
         case "media":
-            mediaUi.open();
+            openUi("media", (u) => u.open());
             return true;
         case "vars":
-            templ.openVars();
+            openUi("templates", (u) => u.openVars());
             return true;
         case "calibrate":
-            calUi.open();
+            openUi("cal", (u) => u.open());
             return true;
         case "network":
-            netUi.open();
+            openUi("network", (u) => u.open());
             return true;
         case "addText":
             editor.addBox(defaultText(page, editor.safe));
@@ -1313,7 +1395,8 @@ document.addEventListener("keydown", (e) => {
         return;
     }
     const tag = e.target && e.target.tagName;
-    const onControl = tag === "BUTTON" || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    // (a control in a dialog that just closed keeps focus for a moment: not one)
+    const onControl = (tag === "BUTTON" || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") && !e.target.closest("[hidden]");
     if (!box && !onControl && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const a = actionFor("browse", e);
         if (a === "select") {
@@ -1402,6 +1485,11 @@ document.addEventListener("keydown", (e) => {
         cycleRotation();
     } else if (a === "deselect") {
         editor.select(null);
+        // Focus left on a button that was hidden with the add pane (a click
+        // then Esc before the payload took focus) would swallow browse keys.
+        if (document.activeElement && document.activeElement.closest("aside")) {
+            document.activeElement.blur();
+        }
     }
 });
 
@@ -1501,21 +1589,20 @@ function showStatus(msg, kind) {
 function refreshPrinterUi() {
     const p = currentPrinter();
     $("printer-name").textContent = p ? (p.nickname || p.addr) : (state.model ? `${state.model.name} (design)` : "none");
-    const st = p ? printersUi.stateOf(p.addr).state : null;
-    const up = st === "connected" || st === "idle" || st === "printing";
-    $("printer-btn").classList.toggle("ok", !!up);
-    $("print").disabled = !up || printer.busy();
+    const up = !!p && hub.isUp(p.addr);
+    $("printer-btn").classList.toggle("ok", up);
+    $("print").disabled = !up || !!(uiNow.get("print") && uiNow.get("print").busy());
     if (Date.now() - msgAt < MSG_MS) {
         return;
     }
     if (!ws.connected) {
         showStatus(`board unreachable (${deviceLabel()})`, "err");
-    } else if (!printersUi.hubUp()) {
+    } else if (!hub.hubUp()) {
         showStatus(`no printer_hub on ${deviceLabel()} · designing only`, "");
     } else if (!p) {
         showStatus("no printer selected", "");
     } else {
-        showStatus(`${p.nickname || p.addr}: ${printersUi.stateText(p.addr)}`, up ? "ok" : "");
+        showStatus(`${p.nickname || p.addr}: ${hub.stateText(p.addr)}`, up ? "ok" : "");
     }
 }
 
@@ -1524,7 +1611,7 @@ function scheduleStatus() {
     clearTimeout(statusTimer);
     statusTimer = setTimeout(async () => {
         if (ws.connected && !document.hidden) {
-            await printersUi.refreshStatus();
+            await hub.refreshStatus();
         }
         refreshPrinterUi();
         scheduleStatus();
@@ -1537,7 +1624,7 @@ document.addEventListener("visibilitychange", () => scheduleStatus());
 // wrote it to flash, so that is the fallback.
 async function readMode() {
     try {
-        const r = await fetch("mode.json", { cache: "no-store" });
+        const r = await fetchRetry("mode.json", { cache: "no-store" });
         if (r.ok) {
             return await r.json();
         }
@@ -1552,8 +1639,9 @@ async function onBoard() {
     await refreshSd().catch(() => false);
     const mode = await readMode();
     $("mode-switch").hidden = !(mode && mode.mode === "companion");
-    await Promise.all([loadUserMedia(), loadPrinters()]);
-    await printersUi.refreshDrivers();
+    await loadUserMedia();   // one settings read at a time (lazy.js: the card's route is narrow)
+    await loadPrinters();
+    await hub.refreshDrivers();
     // The selected printer decides the model; a live driver's caps replace the
     // shipped ones (same key, maybe different numbers).
     const p = currentPrinter();
@@ -1561,11 +1649,15 @@ async function onBoard() {
     const switched = !state.model || m.key !== state.model.key;
     setModel(m, { keepMedia: true });
     applyPage({ rescale: switched });
-    await printersUi.refreshStatus();
-    printersUi.autoConnect();
+    await hub.refreshStatus();
+    hub.autoConnect();
     refreshPrinterUi();
+    if (!state.boardReady) {
+        prefetch();
+    }
     state.boardReady = true;
 }
+hub.onHub(() => refreshPrinterUi());
 
 ws.on("_open", () => {
     onBoard().catch((err) => setStatus(String(err.message || err), "err"));

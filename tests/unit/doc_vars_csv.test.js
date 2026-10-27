@@ -15,7 +15,7 @@ test("a pm220 v2 label imports as a 50x30 PM220 label with its objects", () => {
     const d = fromDocument(pm);
     assert.equal(d.legacy, true);
     assert.deepEqual(d.media, LEGACY_MEDIA);
-    assert.deepEqual(d.model, { driver: "nelko_pm220", id: "pm220" });
+    assert.deepEqual(d.model, { driver: "nelko_tspl", id: "pm220" });
     assert.equal(d.objects[0].x, 100);
     assert.equal(d.objects[0].ignoreSafe, false);
 });

@@ -105,6 +105,47 @@ export function normaliseCalibration(cal, geo) {
     return c;
 }
 
+// ---- calibration files ------------------------------------------------------
+
+export const CAL_FORMAT = "btgw-printer-cal";
+export const CAL_KEYS = ["offset_x_mm", "offset_y_mm", "gap_mm", "origin_x_adj", "origin_y_adj", "print_height_adj",
+    "safe_x0", "safe_y0", "safe_x1", "safe_y1"];
+
+/** A calibration file → {cal, pm220, model, media_id}. Takes the pm220
+ *  firmware's flat settings/print.json (always the PM220's 50 × 30 mm label)
+ *  or this app's export; keys it lacks keep `current`'s values, and the result
+ *  is clamped for `geo`. */
+export function calibrationFromFile(j, current, geo) {
+    if (!j || typeof j !== "object" || Array.isArray(j) || (j.format && j.format !== CAL_FORMAT)) {
+        throw new Error("not a calibration file");
+    }
+    const keys = CAL_KEYS.filter((k) => typeof j[k] === "number" && Number.isFinite(j[k]));
+    if (!keys.length) {
+        throw new Error("no calibration values in the file");
+    }
+    const cal = { ...current };
+    for (const k of keys) {
+        cal[k] = j[k];
+    }
+    const pm220 = !j.format;
+    return {
+        cal: normaliseCalibration(cal, geo),
+        pm220,
+        model: pm220 ? "pm220" : j.model || null,
+        media_id: pm220 ? "nelko-pm220-50x30" : j.media_id || null,
+    };
+}
+
+/** This app's calibration file. The flat keys come first and it is one line,
+ *  so the pm220 firmware's parser (a 320-byte read) still finds them all. */
+export function calibrationFile(cal, model, mediaId) {
+    const out = {};
+    for (const k of CAL_KEYS) {
+        out[k] = cal[k];
+    }
+    return { ...out, format: CAL_FORMAT, version: 1, model: model || "", media_id: mediaId || "" };
+}
+
 /** Where the bitmap lands on the label, and how much of it prints.
  *  A line-for-line port of job_compute_layout() (pm220 src/printer/job.c). */
 export function computeLayout(geo, cal) {

@@ -489,6 +489,5 @@ export function bindNetwork({ setStatus }) {
         poll();
     }
 
-    $("wifi-settings").addEventListener("click", () => open());
     return { isOpen: () => dlg.isOpen(), open, close: () => dlg.close() };
 }

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { fresh, getJson, listDir, PL70E, waitJobs } from './helpers.js';
+import { fresh, getJson, listDir, PL70E, waitJobs, reload } from './helpers.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -97,7 +97,7 @@ test('save to flash and to the SD card, reopen, rename, delete — keyboard only
 test('the SD tab is hidden when there is no card', async ({ page }) => {
   await fresh(page);
   await page.route('**/api/sd', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true,"present":false,"mounted":false,"state":"none"}' }));
-  await page.reload();
+  await reload(page);
   await expect(page.locator('#status')).not.toHaveText('connecting…');
   await page.keyboard.press('Control+o');
   await expect(page.locator('#picker')).toBeVisible();
@@ -126,7 +126,7 @@ test('a label left by pm220_rp2_webapp in this browser is restored', async ({ pa
     localStorage.clear();
     localStorage.setItem('pm220-editor-v1', JSON.stringify({ format: 'pm220-label', version: 2, objects: [{ id: 4, type: 'qr', x: 100, y: 100, width: 80, height: 80, payload: 'legacy' }] }));
   });
-  await page.reload();
+  await reload(page);
   await expect(page.locator('#media-name')).toHaveText('50 × 30 mm');
   expect(await page.evaluate(() => window.btgwPrinter.editor.boxes.map((b) => b.payload))).toEqual(['legacy']);
 });
@@ -151,7 +151,7 @@ test('download writes plain JSON even for a gzipped stored label', async ({ page
 test('a printed label from a saved template still prints after a reload', async ({ page }) => {
   await fresh(page, { printer: PL70E });
   await addText(page, 'persist');
-  await page.reload();
+  await reload(page);
   await expect(page.locator('#status')).toContainText('connected');
   expect(await page.evaluate(() => window.btgwPrinter.editor.boxes.map((b) => b.text))).toEqual(['persist']);
   await page.click('#print');

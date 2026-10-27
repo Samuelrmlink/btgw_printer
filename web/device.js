@@ -7,6 +7,17 @@
 
 import { WsApi } from "./js/btgw/wsapi.js";
 import * as fs from "./js/btgw/fs.js";
+import { isBusy, queue } from "./lazy.js";
+
+// Every HTTP request to the board goes through lazy.js's queue (two at most
+// in flight; a busy answer or a lost request backs off and is queued again).
+// A read is retried on any 409 or 503; a write only on the connection limit's
+// 409 "busy" or a 503, not on LittleFS's own 409 "fs write busy or failed",
+// which the settings store answers by moving to the card (store.js).
+const readLost = (r, err) => !!err || !!r.offline || isBusy(r.status);
+const writeLost = (r, err) => !!err || !!r.offline || r.status === 503 || (r.status === 409 && r.error === "busy");
+const read = (fn) => queue.run(fn, readLost);
+const write = (fn) => queue.run(fn, writeLost);
 
 export { fs };
 
@@ -64,7 +75,7 @@ export async function refreshSd() {
         return false;
     }
     fs.setSd(true);
-    const s = await fs.sdStatus();
+    const s = await read(() => fs.sdStatus());
     sdUp = !!(s.ok && s.mounted);
     if (!sdUp) {
         fs.setSd(false);
@@ -114,30 +125,15 @@ export async function gzipUtf8(text) {
     return new Uint8Array(out);
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/** A file's bytes, gunzipped if it was stored gzipped. The board serves one
- *  file at a time and answers 409 while busy, so a few retries (pm220 rule). */
+/** A file's bytes, gunzipped if it was stored gzipped. */
 export async function readBytes(path) {
-    let last = null;
-    for (let i = 0; i < 4; i++) {
-        const r = await fs.readBlob(path);
-        if (r.ok) {
-            const bytes = new Uint8Array(await r.blob.arrayBuffer());
-            return isGzip(bytes) ? gunzip(bytes) : bytes;
-        }
-        last = r;
-        if (r.status === 404) {
-            break;
-        }
-        if (r.status === 409 || r.offline) {
-            await sleep(150 * (i + 1));
-            continue;
-        }
-        break;
+    const r = await read(() => fs.readBlob(path));
+    if (r.ok) {
+        const bytes = new Uint8Array(await r.blob.arrayBuffer());
+        return isGzip(bytes) ? gunzip(bytes) : bytes;
     }
-    const err = new Error(last?.error || "read failed");
-    err.status = last?.status;
+    const err = new Error(r.error || "read failed");
+    err.status = r.status;
     throw err;
 }
 
@@ -160,7 +156,7 @@ export async function readJsonOr(path, fallback = null) {
 
 export async function writeFile(path, data) {
     const body = data instanceof Uint8Array ? new Blob([data]) : data;
-    const r = await fs.write(path, body);
+    const r = await write(() => fs.write(path, body));
     if (!r.ok) {
         throw new Error(r.error || "write failed");
     }
@@ -172,7 +168,7 @@ export async function writeJson(path, obj) {
 }
 
 export async function listDir(dir) {
-    const r = await fs.list(dir);
+    const r = await read(() => fs.list(dir));
     if (!r.ok) {
         if (r.status === 404) {
             return [];
@@ -183,14 +179,14 @@ export async function listDir(dir) {
 }
 
 export async function removeFile(path) {
-    const r = await fs.remove(path);
+    const r = await write(() => fs.remove(path));
     if (!r.ok) {
         throw new Error(r.error || "delete failed");
     }
 }
 
 export async function renameFile(from, to) {
-    const r = await fs.rename(from, to);
+    const r = await write(() => fs.rename(from, to));
     if (!r.ok) {
         throw new Error(r.error || "rename failed");
     }
@@ -201,7 +197,7 @@ export async function renameFile(from, to) {
  *  as .json). */
 export async function downloadStored(path, name) {
     let bytes = await (async () => {
-        const r = await fs.readBlob(path);
+        const r = await read(() => fs.readBlob(path));
         if (!r.ok) {
             throw new Error(r.error || "download failed");
         }
@@ -230,23 +226,27 @@ export function saveBlob(blob, name) {
 // ---- Wi-Fi: plain HTTP on the parent (src/net/http.c wifi_routes) ----------
 
 async function wifiReq(method, path, body) {
-    let res;
+    let got;
     try {
-        res = await fetch(fs.apiUrl(path), {
-            method,
-            cache: "no-store",
-            body: body == null ? undefined : JSON.stringify(body),
-            headers: body == null ? undefined : { "Content-Type": "text/plain" },
-        });
+        got = await queue.run(async () => {
+            const res = await fetch(fs.apiUrl(path), {
+                method,
+                cache: "no-store",
+                body: body == null ? undefined : JSON.stringify(body),
+                headers: body == null ? undefined : { "Content-Type": "text/plain" },
+            });
+            let data = {};
+            try {
+                data = await res.json();
+            } catch {
+                /* empty */
+            }
+            return { res, data };
+        }, (g, err) => !!err || isBusy(g.res.status));
     } catch {
         throw new Error("device unreachable");
     }
-    let data = {};
-    try {
-        data = await res.json();
-    } catch {
-        /* empty */
-    }
+    const { res, data } = got;
     if (!res.ok || data.ok === false) {
         throw new Error(data.error || `HTTP ${res.status}`);
     }

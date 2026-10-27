@@ -93,19 +93,32 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
     }
 
     function close() {
+        if (overlay.contains(document.activeElement)) {
+            document.activeElement.blur();
+        }
         overlay.hidden = true;
     }
 
+    let listGen = 0;
     async function refresh() {
+        const gen = ++listGen;
         showErr("");
         listEl.replaceChildren();
         emptyEl.hidden = true;
+        let got;
         try {
-            files = (await listDir(DIR_OF())).filter((f) => !f.dir);
+            got = (await listDir(DIR_OF())).filter((f) => !f.dir);
         } catch (err) {
-            files = [];
-            showErr(String(err.message || err));
+            got = [];
+            if (gen === listGen) {
+                showErr(String(err.message || err));
+            }
         }
+        if (gen !== listGen) {
+            return;   // the store or folder changed while this listing was on its way
+        }
+        files = got;
+        listEl.replaceChildren();
         emptyEl.hidden = files.length > 0 || !errEl.hidden;
         for (const info of files) {
             listEl.appendChild(rowEl(info));
@@ -538,9 +551,6 @@ export function bindPicker({ getDoc, loadDoc, picoName, setPicoName, setStatus }
             activateCurrent();
         }
     });
-
-    $("open").addEventListener("click", () => open("open"));
-    $("save").addEventListener("click", () => open("save"));
 
     return {
         isOpen: () => !overlay.hidden,

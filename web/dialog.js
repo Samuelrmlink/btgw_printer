@@ -77,6 +77,9 @@ export class Dialog {
         if (!this.isOpen()) {
             return;
         }
+        if (this.root.contains(document.activeElement)) {
+            document.activeElement.blur();   // or the page's keys would go to a hidden control
+        }
         this.root.hidden = true;
         const i = stack.indexOf(this);
         if (i >= 0) {

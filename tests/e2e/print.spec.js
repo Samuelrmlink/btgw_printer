@@ -8,7 +8,7 @@ test('keyboard only: find a printer, save it, add a text box, print', async ({ p
   await page.keyboard.press('Shift+P');
   await expect(page.locator('#printers')).toBeVisible();
   await page.keyboard.press('s');
-  await expect(page.locator('#printers-found li')).toHaveCount(5);
+  await expect(page.locator('#printers-found li')).toHaveCount(6);   // one per model, plus a PM220 named late
   // Tab to the found list, then j to the PL70e (second row) and Enter
   const pl70 = page.locator('#printers-found li', { hasText: 'PL70e' }).locator('button');
   for (let i = 0; i < 12 && !(await pl70.evaluate((b) => b === document.activeElement)); i++) {

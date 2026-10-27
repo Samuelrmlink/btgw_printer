@@ -147,9 +147,10 @@ export function bindMedia(ctx) {
             models: $("me-all").checked ? [] : (editing.models && editing.models.length ? editing.models : (model ? [model.id] : [])),
         };
         try {
-            await saveUserMedia(rec);
+            const where = await saveUserMedia(rec);
             endEdit();
             choose(allMedia().find((x) => x.id === rec.id) || rec);
+            ctx.setStatus(`label size saved to ${where}`, "ok");
         } catch (err) {
             showErr(String(err.message || err));
         }
@@ -158,7 +159,6 @@ export function bindMedia(ctx) {
     $("media-new").addEventListener("click", () => edit(null));
     $("media-close").addEventListener("click", () => dlg.close());
     $("media-orient").addEventListener("change", () => ctx.setOrient(Number($("media-orient").value) || 0));
-    $("media-btn").addEventListener("click", () => open());
 
     function open() {
         showErr("");

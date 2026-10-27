@@ -3,14 +3,27 @@
  * Models come from printer.drivers when printer_hub is running, else from the
  * shipped presets/models.json, so a label can be designed with no board.
  * Label sizes are the shipped presets/media/*.json plus the user's own in
- * printer/media.json. Saved printers and their calibration live in
- * printer/printers.json (docs/architecture.md). */
+ * media.json. Saved printers and their calibration live in printers.json
+ * (docs/architecture.md); both under printer/ on flash or sd/printer/ on the
+ * card (store.js decides). */
 
-import { readJsonOr, writeJson } from "./device.js";
+import { readJsonOr, sdAvailable, writeJson } from "./device.js";
 import { defaultCalibration, labelGeometry, normaliseCalibration } from "./layout.js";
+import { migrateDriver, migratePrinters, servedFromSd, settingsStore } from "./store.js";
+import { fetchRetry } from "./lazy.js";
 
-export const MEDIA_PATH = "printer/media.json";
-export const PRINTERS_PATH = "printer/printers.json";
+const MEDIA = "media.json";
+const PRINTERS = "printers.json";
+const store = settingsStore({
+    read: (path) => readJsonOr(path, null),
+    write: writeJson,
+    sdUp: sdAvailable,
+    served: servedFromSd(globalThis.location && location.pathname),
+});
+
+/** Where a settings file is saved now, e.g. "sd/printer/printers.json". */
+export const printersPath = () => store.path(PRINTERS);
+export const mediaPath = () => store.path(MEDIA);
 
 let presetDrivers = [];
 let liveDrivers = null;
@@ -34,7 +47,7 @@ function changed() {
 }
 
 async function fetchJson(url) {
-    const r = await fetch(url, { cache: "no-store" });
+    const r = await fetchRetry(url, { cache: "no-store" });
     if (!r.ok) {
         throw new Error(`${url}: HTTP ${r.status}`);
     }
@@ -96,7 +109,8 @@ export function findModel(ref) {
     if (typeof ref === "string") {
         return all.find((m) => m.key === ref || m.id === ref) || null;
     }
-    return all.find((m) => m.driver === ref.driver && m.id === ref.id) ||
+    const driver = migrateDriver(ref.driver);
+    return all.find((m) => m.driver === driver && m.id === ref.id) ||
         all.find((m) => m.id === ref.id) || null;
 }
 
@@ -114,7 +128,7 @@ export function isDriverLive(driver) {
 // ---- label sizes --------------------------------------------------------
 
 export async function loadUserMedia() {
-    const j = await readJsonOr(MEDIA_PATH, null).catch(() => null);
+    const j = await store.load(MEDIA).catch(() => null);
     userMedia = j && Array.isArray(j.media) ? j.media.map((m) => ({ ...m, preset: false })) : [];
     changed();
 }
@@ -161,21 +175,22 @@ export async function saveUserMedia(media) {
     } else {
         userMedia.push({ ...m, preset: false });
     }
-    await writeJson(MEDIA_PATH, { version: 1, media: userMedia.map(({ preset, ...rest }) => rest) });
+    const path = await store.save(MEDIA, { version: 1, media: userMedia.map(({ preset, ...rest }) => rest) });
     changed();
+    return path;
 }
 
 export async function deleteUserMedia(id) {
     userMedia = userMedia.filter((m) => m.id !== id);
-    await writeJson(MEDIA_PATH, { version: 1, media: userMedia.map(({ preset, ...rest }) => rest) });
+    const path = await store.save(MEDIA, { version: 1, media: userMedia.map(({ preset, ...rest }) => rest) });
     changed();
+    return path;
 }
 
 // ---- saved printers -------------------------------------------------------
 
 export async function loadPrinters() {
-    const j = await readJsonOr(PRINTERS_PATH, null).catch(() => null);
-    printers = j && Array.isArray(j.printers) ? j : { version: 1, printers: [] };
+    printers = migratePrinters(await store.load(PRINTERS).catch(() => null));
     changed();
 }
 
@@ -194,8 +209,9 @@ export async function savePrinter(p) {
     } else {
         printers.printers.push({ calibration: {}, ...p });
     }
-    await writeJson(PRINTERS_PATH, printers);
+    const path = await store.save(PRINTERS, printers);
     changed();
+    return path;
 }
 
 export async function forgetPrinter(addr) {
@@ -203,8 +219,9 @@ export async function forgetPrinter(addr) {
     if (printers.current === addr) {
         delete printers.current;
     }
-    await writeJson(PRINTERS_PATH, printers);
+    const path = await store.save(PRINTERS, printers);
     changed();
+    return path;
 }
 
 export function currentPrinterAddr() {
@@ -213,8 +230,9 @@ export function currentPrinterAddr() {
 
 export async function setCurrentPrinter(addr) {
     printers.current = addr || undefined;
-    await writeJson(PRINTERS_PATH, printers);
+    const path = await store.save(PRINTERS, printers);
     changed();
+    return path;
 }
 
 /** The calibration for one printer × label size: saved, else the media's factory values. */
@@ -231,8 +249,9 @@ export async function saveCalibration(addr, media, cal) {
         throw new Error("save the printer first");
     }
     p.calibration = { ...(p.calibration || {}), [media.id]: cal };
-    await writeJson(PRINTERS_PATH, printers);
+    const path = await store.save(PRINTERS, printers);
     changed();
+    return path;
 }
 
 /** A JSON-safe, test-friendly reset (tests only). */

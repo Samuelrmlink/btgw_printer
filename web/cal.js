@@ -1,13 +1,22 @@
 /** Calibration: the pm220 dialog, now per printer × label size.
  *
  * Fields and limits are the pm220 ones (settings/print.json there); the
- * layout math is layout.js computeLayout. Saved in printer/printers.json under
+ * layout math is layout.js computeLayout. Saved in printers.json (catalog.js) under
  * the printer's address and the label size's id. With no saved printer the
  * values only last for this session. */
 
-import { describeLayout, pageFor, normaliseCalibration, labelGeometry, defaultCalibration, CAL_ADJ_LIM, CAL_MM_LIM } from "./layout.js";
+import {
+    describeLayout, pageFor, normaliseCalibration, labelGeometry, defaultCalibration, calibrationFile, calibrationFromFile,
+    CAL_ADJ_LIM, CAL_MM_LIM,
+} from "./layout.js";
 import { isNumField, setDynamicBounds, stepNumField } from "./numfield.js";
 import { monoNew } from "./pack.js";
+import { printersPath } from "./catalog.js";
+import { readFileText } from "./doc.js";
+import { readJsonOr, saveBlob, sdAvailable } from "./device.js";
+
+/** Where a pm220_rp2_webapp board kept its calibration (src/printer/job.c CAL_PATH). */
+const BOARD_CAL = ["settings/print.json", "sd/settings/print.json"];
 
 const $ = (id) => document.getElementById(id);
 
@@ -99,6 +108,7 @@ export function bindCalibrate(ctx) {
     let geo = null;
     let model = null;
     let media = null;
+    let board = null;   // {path, json}: an old pm220 settings/print.json on this board
 
     setDynamicBounds((el) => {
         if (!geo || !el.id.startsWith("cal-")) {
@@ -148,6 +158,49 @@ export function bindCalibrate(ctx) {
         }
     }
 
+    function showLoaded(msg) {
+        $("cal-loaded").hidden = !msg;
+        $("cal-loaded").textContent = msg || "";
+    }
+
+    /** Fill the fields from a calibration file's JSON; nothing is saved until Save. */
+    function loadFrom(json, name) {
+        const r = calibrationFromFile(json, readCal(), geo);
+        fill(r.cal);
+        updateEffective();
+        let note = "";
+        if (r.pm220 && model.id !== "pm220") {
+            note = ` (a pm220 calibration for its 50 × 30 mm label; this is a ${model.name})`;
+        } else if ((r.model && r.model !== model.id) || (r.media_id && r.media_id !== media.id)) {
+            note = ` (made for ${r.model || "?"} · ${r.media_id || "?"})`;
+        }
+        showLoaded(`loaded from ${name}${note} — Save to keep it`);
+    }
+
+    async function findBoardFile() {
+        board = null;
+        $("cal-board").hidden = true;
+        for (const path of BOARD_CAL) {
+            if (path.startsWith("sd/") && !sdAvailable()) {
+                continue;
+            }
+            const json = await readJsonOr(path, null).catch(() => null);
+            if (json && !overlay.hidden) {
+                board = { path, json };
+                $("cal-board").textContent = `Load from board (${path})`;
+                $("cal-board").hidden = false;
+                return;
+            }
+        }
+    }
+
+    function exportFile() {
+        const cur = ctx.current();
+        const who = String((cur.printer && cur.printer.nickname) || model.id).replace(/[^A-Za-z0-9._-]+/g, "-");
+        const json = JSON.stringify(calibrationFile(readCal(), model.id, media.id));
+        saveBlob(new Blob([json + "\n"], { type: "application/json" }), `${who}-${media.id}.cal.json`);
+    }
+
     function updateEffective() {
         if (!model || !media) {
             return;
@@ -168,16 +221,21 @@ export function bindCalibrate(ctx) {
         geo = labelGeometry(model, media);
         $("cal-title").textContent = `Calibration · ${cur.printer ? (cur.printer.nickname || cur.printer.addr) : model.name} · ${media.name}`;
         $("cal-for").textContent = cur.printer
-            ? `Saved for ${cur.printer.nickname || cur.printer.addr} with ${media.name} labels (printer/printers.json).`
+            ? `Saved for ${cur.printer.nickname || cur.printer.addr} with ${media.name} labels (${printersPath()}).`
             : "No saved printer is selected: these values apply until the page is reloaded. Save a printer to keep them.";
         fill(ctx.loadCal(cur.addr, model, media));
         updateEffective();
+        showLoaded("");
         overlay.hidden = false;
+        findBoardFile();
         $("cal-offx").focus();
         $("cal-offx").select();
     }
 
     function close() {
+        if (overlay.contains(document.activeElement)) {
+            document.activeElement.blur();
+        }
         overlay.hidden = true;
     }
 
@@ -186,10 +244,10 @@ export function bindCalibrate(ctx) {
         const cal = readCal();
         fill(cal);
         try {
-            await ctx.saveCal(ctx.current().addr, media, cal);
+            const where = await ctx.saveCal(ctx.current().addr, media, cal);
             ctx.applied(cal);
             updateEffective();
-            ctx.setStatus("calibration saved", "ok");
+            ctx.setStatus(where ? `calibration saved to ${where}` : "calibration kept for this session", "ok");
             return true;
         } catch (err) {
             showErr(String(err.message || err));
@@ -198,10 +256,34 @@ export function bindCalibrate(ctx) {
     }
 
     overlay.addEventListener("input", () => updateEffective());
-    $("calibrate").addEventListener("click", () => open());
     $("cal-close").addEventListener("click", () => close());
     $("cal-save").addEventListener("click", () => save());
+    $("cal-load").addEventListener("click", () => $("cal-file").click());
+    $("cal-file").addEventListener("change", async (e) => {
+        const file = e.target.files && e.target.files[0];
+        e.target.value = "";
+        if (!file) {
+            return;
+        }
+        showErr("");
+        try {
+            loadFrom(JSON.parse(await readFileText(file)), file.name);
+        } catch (err) {
+            showErr(`${file.name}: ${err.message || err}`);
+        }
+        $("cal-load").focus();
+    });
+    $("cal-board").addEventListener("click", () => {
+        showErr("");
+        try {
+            loadFrom(board.json, board.path);
+        } catch (err) {
+            showErr(`${board.path}: ${err.message || err}`);
+        }
+    });
+    $("cal-export").addEventListener("click", () => exportFile());
     $("cal-reset").addEventListener("click", () => {
+        showLoaded("");
         fill(defaultCalibration(model, media));
         updateEffective();
     });
@@ -222,10 +304,11 @@ export function bindCalibrate(ctx) {
         }
     });
     const fieldIds = FIELDS.map((f) => f[0]);
-    const actionIds = ["cal-test", "cal-reset", "cal-save", "cal-close"];
+    const actionIds = ["cal-test", "cal-reset", "cal-load", "cal-board", "cal-export", "cal-save", "cal-close"];
+    const shown = (ids) => ids.map($).filter((el) => el && !el.hidden);
 
     function calFocusables() {
-        return [...fieldIds, ...actionIds].map($).filter(Boolean);
+        return shown([...fieldIds, ...actionIds]);
     }
 
     document.addEventListener("keydown", (e) => {
@@ -240,7 +323,16 @@ export function bindCalibrate(ctx) {
         const mod = e.ctrlKey || e.metaKey;
         if (mod && !e.altKey && e.key.toLowerCase() === "s") {
             e.preventDefault();
-            save();
+            if (e.shiftKey) {
+                exportFile();
+            } else {
+                save();
+            }
+            return;
+        }
+        if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "o") {
+            e.preventDefault();
+            $("cal-file").click();
             return;
         }
         if (e.key === "Tab") {
@@ -282,7 +374,7 @@ export function bindCalibrate(ctx) {
         const left = e.key === "ArrowLeft" || e.key === "h" || e.key === "ArrowUp" || e.key === "k";
         if (onActions && (right || left)) {
             e.preventDefault();
-            const els = actionIds.map($).filter(Boolean);
+            const els = shown(actionIds);
             const i = Math.max(0, els.indexOf(e.target));
             const n = els.length;
             const next = right ? (i + 1) % n : (i - 1 + n) % n;

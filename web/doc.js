@@ -45,7 +45,7 @@ export function migrateObject(raw, docVersion = VERSION) {
 export const LEGACY_FORMAT = "pm220-label";
 /** The PM220 label every legacy (pm220_rp2_webapp) file was drawn for. */
 export const LEGACY_MEDIA = { id: "nelko-pm220-50x30", name: "50 × 30 mm", w_mm: 50, h_mm: 30, gap_mm: 2, type: "gap" };
-export const LEGACY_MODEL = { driver: "nelko_pm220", id: "pm220" };
+export const LEGACY_MODEL = { driver: "nelko_tspl", id: "pm220" };
 
 function mediaBlock(m) {
     if (!m) {

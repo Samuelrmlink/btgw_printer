@@ -66,4 +66,9 @@ function computeLayout(adj) {
     return { originX, originY, printW, printH, shiftX, shiftY, pageW, pageH };
 }
 
-export { computeLayout, mmToDots, SRC_W, SRC_H, WIDTH_MM, HEIGHT_MM, DPI };
+// Not from pm220: tests/fixtures/pm220_print.json (a settings/print.json with
+// every value off its factory default, origin_y_adj left out) and the layout
+// the function above gives for it, written down so a change to either shows.
+const PRINT_JSON_LAYOUT = { originX: 5, originY: 20, printW: 384, printH: 216, shiftX: 0, shiftY: 0, pageW: 400, pageH: 240 };
+
+export { computeLayout, mmToDots, SRC_W, SRC_H, WIDTH_MM, HEIGHT_MM, DPI, PRINT_JSON_LAYOUT };

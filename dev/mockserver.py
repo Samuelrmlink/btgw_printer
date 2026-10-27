@@ -12,10 +12,21 @@ plays the parts of the board the app uses:
   /api/sd, /api/sd/files/..., /api/sd/rename   an in-memory card
   /api/wifi...        the parent's Wi-Fi routes
 
-  python3 dev/mockserver.py --port 8096 [--mode companion|standalone] [--no-sd] [--no-hub]
+  python3 dev/mockserver.py --port 8096 [--mode companion|standalone] [--no-sd] [--no-hub] [--flash-readonly]
+                            [--max-concurrent N [--busy-503]] [--static-delay-ms MS]
+
+--flash-readonly answers every PUT /api/fs/... with 500 "write failed", like
+the bench board's LittleFS (parent bug B3).
+--max-concurrent N answers a static GET (not /api, not /ws) beyond N in
+flight with 409 {"ok":false,"error":"busy"} and Connection: close, like the
+board's HTTP connection limit (--busy-503: the older /sd queue's 503 "card
+busy" with Retry-After: 1); --static-delay-ms holds each static GET that
+long, so requests overlap.
 
 The fake printers come from web/presets/models.json: one per model, found by
-printer.scan. printer.print checks the bitmap file is exactly rows × row
+printer.scan. The scan also plays nelko_tspl's late names: LATE is reported
+unnamed, then again with its name and model a second later; the PL70e's
+address is reported unnamed by nelko_tspl, then gone. printer.print checks the bitmap file is exactly rows × row
 bytes and reports printer.job events like the hub does.
 """
 import argparse, base64, hashlib, json, os, socket, struct, threading, time, urllib.parse
@@ -26,7 +37,8 @@ WEB = os.path.join(ROOT, "web")
 PARENT_JS = os.path.join(ROOT, "btgw", "web", "js")
 EXT = os.path.join(ROOT, "ext")
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-OPTS = {"mode": "companion", "sd": True, "hub": True}
+OPTS = {"mode": "companion", "sd": True, "hub": True, "flash_ro": False, "max_static": 0, "static_delay": 0.0, "busy_503": False}
+STATIC_IN_FLIGHT = [0]
 LOCK = threading.RLock()
 CLIENTS = []   # (send fn)
 
@@ -39,13 +51,23 @@ def models():
         return json.load(f)["drivers"]
 
 
+# Fixed fake addresses per model (the e2e suite names them), whatever the
+# driver grouping in models.json; a new model gets the next free one.
+ADDR_ORDER = ["pm220", "pl70e", "p21", "d30", "virtual"]
+
+
+# A PM220 whose Bluetooth name arrives late (nelko_tspl reports it twice).
+LATE = {"driver": "nelko_tspl", "addr": "AA:BB:CC:00:10:10", "name": "PM220", "rssi": -71, "model": "pm220", "transport": "classic"}
+
+
 def fake_devices():
-    out = []
-    for i, d in enumerate(models()):
-        for m in d["models"]:
-            addr = "AA:BB:CC:00:%02X:%02X" % (i, len(out))
-            out.append({"driver": d["driver"], "addr": addr, "name": "%s %s" % (m.get("vendor", ""), m["name"]), "rssi": -50 - i * 3,
-                        "model": m["id"], "transport": m.get("transport", "")})
+    out = [dict(LATE)] if STATE.get("late_named") else []
+    flat = [(d, m) for d in models() for m in d["models"]]
+    extra = [m["id"] for d, m in flat if m["id"] not in ADDR_ORDER]
+    for d, m in flat:
+        i = (ADDR_ORDER + extra).index(m["id"])
+        out.append({"driver": d["driver"], "addr": "AA:BB:CC:00:%02X:%02X" % (i, i), "name": "%s %s" % (m.get("vendor", ""), m["name"]),
+                    "rssi": -50 - i * 3, "model": m["id"], "transport": m.get("transport", "")})
     return out
 
 
@@ -66,6 +88,7 @@ def reset_state():
             "wg": {"configured": True, "connected": True, "confirmed": True, "address": "10.255.255.23",
                    "endpoint": "203.0.113.5", "endpoint_port": 51820, "last_handshake_age_ms": 4000, "rx_bytes": 1000, "tx_bytes": 900},
             "cancel": set(),
+            "late_named": False,   # LATE is in printer.devices once a scan has named it
         })
         STATE["fs"]["printer/mode.json"] = json.dumps({"mode": OPTS["mode"]}).encode()
         STATE["fs"]["cfg/wireguard.json"] = json.dumps({"private_key": "x" * 44, "peer_public_key": "y" * 44, "address": "10.255.255.23",
@@ -159,9 +182,19 @@ def printer_op(name, p):
         return {"drivers": drivers_caps()}
     if name == "printer.scan":
         def later():
+            pl70e = next(d for d in fake_devices() if d["model"] == "pl70e")
+            broadcast("printer.found", dict(LATE, name="", model=None))
+            broadcast("printer.found", {"driver": "nelko_tspl", "addr": pl70e["addr"], "name": "", "rssi": pl70e["rssi"],
+                                        "model": None, "transport": "classic"})
             for dev in fake_devices():
+                if dev["addr"] == LATE["addr"]:
+                    continue
                 time.sleep(0.05)
                 broadcast("printer.found", dev)
+            time.sleep(0.8)
+            broadcast("printer.found", {"driver": "nelko_tspl", "addr": pl70e["addr"], "name": "PL70e-BT", "gone": True})
+            STATE["late_named"] = True
+            broadcast("printer.found", dict(LATE))
         threading.Thread(target=later, daemon=True).start()
         return {"started": [d["driver"] for d in models()]}
     if name == "printer.devices":
@@ -300,6 +333,13 @@ def list_dir(store, d):
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def setup(self):
+        super().setup()
+        # headers and body go out as two writes: without this, Nagle + delayed
+        # ACK hold every reply ~40 ms, which the --static-delay-ms runs then
+        # cannot tell from their own delay
+        self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
     def log_message(self, fmt, *a):
         if os.environ.get("MOCK_VERBOSE"):
             super().log_message(fmt, *a)
@@ -343,7 +383,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._ws()
         if path.startswith("/api/"):
             return self._api("GET", path)
-        return self._static(path)
+        with LOCK:
+            STATIC_IN_FLIGHT[0] += 1
+            busy = OPTS["max_static"] and STATIC_IN_FLIGHT[0] > OPTS["max_static"]
+        try:
+            if busy and OPTS["busy_503"]:
+                return self._reply(503, {"ok": False, "error": "card busy"}, extra={"Retry-After": "1"})
+            if busy:
+                self.close_connection = True
+                return self._reply(409, {"ok": False, "error": "busy"}, extra={"Connection": "close"})
+            if OPTS["static_delay"]:
+                time.sleep(OPTS["static_delay"])
+            return self._static(path)
+        finally:
+            with LOCK:
+                STATIC_IN_FLIGHT[0] -= 1
 
     def do_PUT(self):
         return self._api("PUT", self._path())
@@ -404,6 +458,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._reply(404, {"ok": False, "error": "not found"})
             S["fs"][b["to"]] = S["fs"].pop(b["from"])
             return self._reply(200, {"ok": True})
+        if path.startswith("/api/fs/") and method == "PUT" and OPTS["flash_ro"]:
+            self._body()
+            return self._reply(500, {"ok": False, "error": "write failed"})
         if path == "/api/fs" or path.startswith("/api/fs/"):
             rel = path[len("/api/fs/"):] if path.startswith("/api/fs/") else ""
             return self._store(S["fs"], method, rel, flash=True)
@@ -557,11 +614,20 @@ def main():
     ap.add_argument("--mode", choices=("companion", "standalone"), default="companion")
     ap.add_argument("--no-sd", action="store_true")
     ap.add_argument("--no-hub", action="store_true")
+    ap.add_argument("--flash-readonly", action="store_true", help="PUT /api/fs/... answers 500 write failed")
+    ap.add_argument("--max-concurrent", type=int, default=0, help="static GETs in flight past this answer 503 card busy")
+    ap.add_argument("--busy-503", action="store_true", help="answer past --max-concurrent with 503 card busy (the old /sd queue)")
+    ap.add_argument("--static-delay-ms", type=int, default=0, help="hold each static GET this long")
     a = ap.parse_args()
-    OPTS.update(mode=a.mode, sd=not a.no_sd, hub=not a.no_hub, hub_default=not a.no_hub)
+    OPTS.update(mode=a.mode, sd=not a.no_sd, hub=not a.no_hub, hub_default=not a.no_hub, flash_ro=a.flash_readonly,
+                max_static=a.max_concurrent, static_delay=a.static_delay_ms / 1000.0, busy_503=a.busy_503)
     reset_state()
-    print("mock board on http://%s:%d/printer/ (%s%s%s)" % (a.bind, a.port, a.mode, "" if OPTS["sd"] else ", no SD",
-                                                            "" if OPTS["hub"] else ", no printer_hub"), flush=True)
+    print("mock board on http://%s:%d/printer/ (%s%s%s%s)" % (a.bind, a.port, a.mode, "" if OPTS["sd"] else ", no SD",
+                                                              "" if OPTS["hub"] else ", no printer_hub",
+                                                              ", flash read-only" if OPTS["flash_ro"] else ""), flush=True)
+    if OPTS["max_static"]:
+        print("static GETs: at most %d at once (then %s), %d ms each" % (OPTS["max_static"], "503" if OPTS["busy_503"] else "409",
+                                                                         a.static_delay_ms), flush=True)
     ThreadingHTTPServer((a.bind, a.port), Handler).serve_forever()
 
 

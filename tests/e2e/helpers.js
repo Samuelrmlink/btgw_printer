@@ -38,6 +38,21 @@ export async function listDir(page, dir) {
   }, dir);
 }
 
+/** Leave the page and let the mock finish what it was serving it, so the
+ *  next page load does not share the card-busy mock's slots with the last. */
+export async function settle(page) {
+  await page.goto('about:blank');
+  await page.waitForTimeout(150);
+}
+
+/** page.reload(), after settle(): a reload right after the page was busy
+ *  would share the card-busy mock's two slots with the old page's requests. */
+export async function reload(page) {
+  const url = page.url();
+  await settle(page);
+  await page.goto(url);
+}
+
 /** A fresh mock and a fresh page (localStorage cleared). */
 export async function fresh(page, { printer = null } = {}) {
   await page.goto('/printer/');
@@ -49,14 +64,15 @@ export async function fresh(page, { printer = null } = {}) {
       printers: [{ calibration: {}, auto_reconnect: true, copies: 1, density: null, speed: -1, ...printer }],
     }));
   }
+  await settle(page);
   await page.goto('/printer/');
   await page.waitForFunction(() => window.btgwPrinter && window.btgwPrinter.state.boardReady);
   if (printer) await expect(page.locator('#status')).toContainText('connected', { timeout: 5000 });
 }
 
 export const PL70E = { addr: 'AA:BB:CC:00:01:01', driver: 'nelko_pl70e', model: 'pl70e', nickname: 'Shipping' };
-export const PM220 = { addr: 'AA:BB:CC:00:00:00', driver: 'nelko_pm220', model: 'pm220', nickname: 'Desk' };
-export const P21 = { addr: 'AA:BB:CC:00:02:02', driver: 'nelko_p21', model: 'p21', nickname: 'Tiny' };
+export const PM220 = { addr: 'AA:BB:CC:00:00:00', driver: 'nelko_tspl', model: 'pm220', nickname: 'Desk' };
+export const P21 = { addr: 'AA:BB:CC:00:02:02', driver: 'nelko_tspl', model: 'p21', nickname: 'Tiny' };
 
 export async function jobs(page) {
   return (await op(page, 'test.jobs')).jobs;

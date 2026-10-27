@@ -79,9 +79,10 @@
         <div class="picker-backdrop"></div>
         <div class="picker-panel cal-panel" role="dialog" aria-labelledby="cal-title">
             <h2 id="cal-title">Calibration</h2>
-            <p class="cal-hint" id="cal-for">Per printer and label size. Registration is offset X / Y (mm); origin adj is extra dots after that; print height adj crops the bitmap. Saved in printer/printers.json.</p>
+            <p class="cal-hint" id="cal-for">Per printer and label size. Registration is offset X / Y (mm); origin adj is extra dots after that; print height adj crops the bitmap. Saved in printers.json.</p>
             <p id="cal-effective" class="cal-effective"></p>
             <p id="cal-err" class="picker-err" hidden></p>
+            <p id="cal-loaded" class="cal-hint" hidden></p>
             <label for="cal-offx">Offset X (mm)</label>
             <input id="cal-offx" type="text" inputmode="decimal" enterkeyhint="done" autocomplete="off" spellcheck="false">
             <label for="cal-offy">Offset Y (mm)</label>
@@ -106,6 +107,10 @@
             <div class="picker-actions">
                 <button type="button" id="cal-test">Test print</button>
                 <button type="button" id="cal-reset">Reset</button>
+                <button type="button" id="cal-load" title="A calibration file: this app's .cal.json or a pm220 settings/print.json (Ctrl+O)">Load file…</button>
+                <button type="button" id="cal-board" hidden>Load from board</button>
+                <button type="button" id="cal-export" title="Download these values as a .cal.json (Ctrl+Shift+S)">Save file…</button>
+                <input id="cal-file" type="file" accept=".json,.cal.json,.json.gz,application/json,application/gzip" hidden>
                 <button type="button" id="cal-save" class="primary">Save</button>
                 <button type="button" id="cal-close">Close</button>
             </div>
@@ -565,6 +570,7 @@
             </div>
         </div>
     </div>
-    <script type="module" src="app.js"></script>
+    <!-- lazy.js loads app.js and its imports a couple at a time: the card's route is narrow -->
+    <script type="module">import { boot } from "./lazy.js"; boot();</script>
 </body>
 </html>

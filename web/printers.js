@@ -1,24 +1,25 @@
-/** Printers: saved configs, scan, connect / disconnect, live state.
+/** The Printers dialog: saved configs, scan, connect / disconnect.
  *
- * All through printer_hub's ops (docs/architecture.md): printer.drivers,
- * printer.scan, printer.devices, printer.connect, printer.disconnect,
- * printer.status, and the printer.found / printer.state / printer.status events. */
+ * Loaded on first use (lazy.js); the live state it shows is hub.js's. Ops
+ * (docs/architecture.md): printer.scan, printer.devices, printer.disconnect,
+ * and the printer.found event; the rest go through hub.js. */
 
 import { call, on } from "./device.js";
 import { Dialog, confirmDialog } from "./dialog.js";
 import {
-    currentPrinterAddr, findModel, findPrinter, forgetPrinter, models, savePrinter, savedPrinters,
-    setCurrentPrinter, setLiveDrivers,
+    currentPrinterAddr, findModel, findPrinter, forgetPrinter, models, printersPath, savePrinter, savedPrinters,
+    setCurrentPrinter,
 } from "./catalog.js";
 import { setBounds } from "./numfield.js";
+import * as hub from "./hub.js";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-export function bindPrinters({ setStatus, onChange }) {
-    const live = new Map();       // addr -> {state, why, battery, paper, lid, media, model, driver}
+/** onChange({printerChanged}) after the current printer or its config changed. */
+export function bindPrinters({ onChange }) {
+    const { stateOf, stateText } = hub;
     let found = [];
-    let hubUp = false;
     let editing = null;           // {addr, driver, isNew}
     let scanning = false;
 
@@ -41,28 +42,6 @@ export function bindPrinters({ setStatus, onChange }) {
     function showErr(msg) {
         $("printers-err").hidden = !msg;
         $("printers-err").textContent = msg || "";
-    }
-
-    function stateOf(addr) {
-        return live.get(addr) || { state: "unknown" };
-    }
-
-    function stateText(addr) {
-        const s = stateOf(addr);
-        const bits = [s.state || "unknown"];
-        if (s.battery != null) {
-            bits.push(`battery ${s.battery}%`);
-        }
-        if (s.paper === false || s.paper === "out") {
-            bits.push("no paper");
-        }
-        if (s.lid === "open" || s.lid === true) {
-            bits.push("lid open");
-        }
-        if (s.why) {
-            bits.push(s.why);
-        }
-        return bits.join(" · ");
     }
 
     function modelName(p) {
@@ -117,44 +96,16 @@ export function bindPrinters({ setStatus, onChange }) {
         }
         $("printers-found-empty").hidden = show.length > 0;
         $("printers-found-empty").textContent = scanning ? "Scanning…" : "Nothing found yet. Scan (s) with the printer switched on.";
-        $("printers-live").textContent = hubUp ? `printer_hub running · ${models().filter((m) => m.live).length} live model(s)` : "printer_hub is not running on the board: printing is off, designing still works.";
-        $("printers-scan").disabled = !hubUp || scanning;
-    }
-
-    async function refreshDrivers() {
-        try {
-            const r = await call("printer.drivers");
-            setLiveDrivers(r.drivers || []);
-            hubUp = true;
-        } catch {
-            setLiveDrivers(null);
-            hubUp = false;
-        }
-        return hubUp;
-    }
-
-    async function refreshStatus() {
-        if (!hubUp) {
-            return;
-        }
-        try {
-            const r = await call("printer.status", {});
-            for (const p of r.printers || []) {
-                live.set(p.addr, { ...stateOf(p.addr), ...p });
-            }
-        } catch {
-            /* hub gone; the next drivers call says so */
-        }
-        onChange && onChange();
-        if (dlg.isOpen()) {
-            paint();
-        }
+        $("printers-live").textContent = hub.hubUp() ? `printer_hub running · ${models().filter((m) => m.live).length} live model(s) · saved in ${printersPath()}` : "printer_hub is not running on the board: printing is off, designing still works.";
+        $("printers-scan").disabled = !hub.hubUp() || scanning;
     }
 
     async function refreshDevices() {
         try {
             const r = await call("printer.devices", {});
-            found = r.devices || [];
+            for (const d of r.devices || []) {
+                upsert(d);
+            }
         } catch {
             /* keep */
         }
@@ -164,7 +115,7 @@ export function bindPrinters({ setStatus, onChange }) {
     }
 
     async function scan() {
-        if (!hubUp || scanning) {
+        if (!hub.hubUp() || scanning) {
             return;
         }
         showErr("");
@@ -184,16 +135,10 @@ export function bindPrinters({ setStatus, onChange }) {
 
     async function connect(p) {
         showErr("");
-        try {
-            live.set(p.addr, { ...stateOf(p.addr), state: "connecting", why: "" });
-            paint();
-            await call("printer.connect", { driver: p.driver, addr: p.addr, config: configOf(p) });
-        } catch (err) {
-            live.set(p.addr, { ...stateOf(p.addr), state: "error", why: String(err.message || err) });
-            showErr(String(err.message || err));
-        }
+        const done = hub.connect(p).catch((err) => showErr(String(err.message || err)));
         paint();
-        onChange && onChange();
+        await done;
+        paint();
     }
 
     async function disconnect(p) {
@@ -204,20 +149,13 @@ export function bindPrinters({ setStatus, onChange }) {
         }
     }
 
-    function configOf(p) {
-        return { model: p.model, density: p.density, speed: p.speed, nickname: p.nickname };
-    }
-
     async function use(addr) {
         await setCurrentPrinter(addr).catch((err) => showErr(String(err.message || err)));
         paint();
         onChange && onChange({ printerChanged: true });
         const p = findPrinter(addr);
-        if (p && hubUp) {
-            const st = stateOf(addr).state;
-            if (st !== "connected" && st !== "printing" && st !== "connecting") {
-                connect(p);
-            }
+        if (p) {
+            hub.connectIfDown(p).then(() => paint());
         }
     }
 
@@ -302,30 +240,34 @@ export function bindPrinters({ setStatus, onChange }) {
     $("pe-cancel").addEventListener("click", () => endEdit());
     $("printers-scan").addEventListener("click", () => scan());
     $("printers-close").addEventListener("click", () => dlg.close());
-    $("printer-btn").addEventListener("click", () => open());
 
-    on("printer.state", (d) => {
-        if (!d || !d.addr) {
-            return;
-        }
-        live.set(d.addr, { ...stateOf(d.addr), ...d });
-        onChange && onChange();
+    hub.onHub(() => {
         if (dlg.isOpen()) {
             paint();
         }
     });
-    on("printer.status", (d) => {
+    function upsert(d) {
+        const i = found.findIndex((x) => x.addr === d.addr && x.driver === d.driver);
+        if (d.gone) {
+            if (i >= 0) {
+                found.splice(i, 1);
+            }
+        } else if (i >= 0) {
+            found[i] = { ...found[i], ...d };
+        } else {
+            found.push(d);
+        }
+    }
+
+    // A driver reports a device again when more is known (a Bluetooth name
+    // that came late fills in name and model), or with gone: true when the
+    // late name shows it is not that driver's printer. One entry per driver
+    // and address: two drivers may both claim one address.
+    on("printer.found", (d) => {
         if (!d || !d.addr) {
             return;
         }
-        live.set(d.addr, { ...stateOf(d.addr), ...d });
-        onChange && onChange();
-    });
-    on("printer.found", (d) => {
-        if (!d || !d.addr || found.some((x) => x.addr === d.addr)) {
-            return;
-        }
-        found.push(d);
+        upsert(d);
         if (dlg.isOpen()) {
             paint();
         }
@@ -337,33 +279,14 @@ export function bindPrinters({ setStatus, onChange }) {
         $("printers-actions").hidden = false;
         dlg.open();
         paint();
-        await refreshDrivers();
-        await refreshStatus();
+        await hub.refreshDrivers();
+        await hub.refreshStatus();
         await refreshDevices();
         paint();
-    }
-
-    /** Connect the current printer if it wants auto-reconnect and is not up. */
-    async function autoConnect() {
-        const addr = currentPrinterAddr();
-        const p = addr && findPrinter(addr);
-        if (!p || !hubUp || p.auto_reconnect === false) {
-            return;
-        }
-        const st = stateOf(addr).state;
-        if (st !== "connected" && st !== "printing" && st !== "connecting") {
-            connect(p);
-        }
     }
 
     return {
         open,
         isOpen: () => dlg.isOpen(),
-        refreshDrivers,
-        refreshStatus,
-        autoConnect,
-        stateOf,
-        stateText,
-        hubUp: () => hubUp,
     };
 }

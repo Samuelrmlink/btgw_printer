@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { fresh, getJson, putFile, waitJobs, PL70E, PM220 } from './helpers.js';
+import { fresh, getJson, putFile, waitJobs, PL70E, PM220, reload } from './helpers.js';
 
 test('switching label size on an open label rescales it; a custom size is saved', async ({ page }) => {
   await fresh(page, { printer: PL70E });
@@ -69,7 +69,7 @@ test('calibration is saved per printer and label size, and the test frame prints
   await page.keyboard.press('Escape');
   await expect(page.locator('#cal')).toBeHidden();
   // the editor's safe rect follows the saved calibration after a reload
-  await page.reload();
+  await reload(page);
   await page.waitForFunction(() => window.btgwPrinter && window.btgwPrinter.state.boardReady);
   const L = await page.evaluate(() => window.btgwPrinter.page().layout);
   expect([L.originX, L.originY, L.printH]).toEqual([0, 8, 232]);
@@ -91,7 +91,7 @@ test('companion mode: BTGW button here, Printer button in the parent UI', async 
 test('standalone mode hides the BTGW button', async ({ page }) => {
   await fresh(page);
   await putFile(page, 'printer/mode.json', '{"mode":"standalone"}');
-  await page.reload();
+  await reload(page);
   await page.waitForFunction(() => window.btgwPrinter && window.btgwPrinter.state.boardReady);
   await expect(page.locator('#mode-switch')).toBeHidden();
 });
@@ -149,7 +149,7 @@ test('help lists the keys; Delete inside the text box edits text, not the object
 test('without printer_hub the app still designs and says why printing is off', async ({ page }) => {
   await fresh(page);
   await page.evaluate(async () => fetch('/api/op', { method: 'POST', body: JSON.stringify({ op: 'test.set', params: { hub: false } }) }));
-  await page.reload();
+  await reload(page);
   await page.waitForFunction(() => window.btgwPrinter && window.btgwPrinter.state.boardReady);
   await expect(page.locator('#status')).toContainText('no printer_hub');
   await expect(page.locator('#print')).toBeDisabled();

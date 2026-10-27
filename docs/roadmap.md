@@ -28,6 +28,7 @@ These are part of the design. They are not tasks.
 - **Plain ES modules, gzipped, never minified or bundled.** Modules load lazily, so the board's SD route is never asked for many files at once.
 - **Be gentle with the board.** Other clients and WebSockets share it. The app keeps at most 2 HTTP requests in flight (one queue for module loads, presets, settings and files), backs off on `409 busy` / `503`, and our tools never load-test it.
 - **Two modes.** Companion: the parent UI plus our app on the SD card at `/sd/apps/printer/`. Standalone: our app is the only web app. [architecture.md](architecture.md).
+- **We never change the firmware on a board.** Printer support is PEX modules plus our own folder on the card (`sd:/apps/printer/`). Building the parent firmware here is a compile check. A need on the firmware side goes into [parent-requirements.md](parent-requirements.md).
 - **Calibration is per printer × label size** and keeps the pm220 fields, names and limits. Old pm220 `settings/print.json` files load in the calibration dialog.
 
 ## Now
@@ -87,6 +88,12 @@ These are part of the design. They are not tasks.
   - Done when: `docs/menus.md` is agreed with the owner, both renderers are built from one model, every current action has a menu path, and e2e covers both renderers (desktop by keyboard and mouse, touch by tap in a mobile viewport).
 
 ## Parked
+
+- [ ] **F8 — What standalone mode ships**
+  - Area: parent, web.
+  - Why: Standalone was planned as a firmware image built from the parent with our config (no parent web UI, our app at `/`). We don't change firmware on a board, so either that image is only a release artifact for dedicated boards (one inside a printer), never flashed onto an existing gateway, or standalone becomes the same unmodified firmware with our app as the start page, which needs a parent setting.
+  - Needs: the owner's decision. The second option is a parent requirement.
+  - Done when: the decision is recorded here and in architecture.md, and `tools/build.py standalone` / the release notes match it.
 
 ## Done
 
