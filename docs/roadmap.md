@@ -87,15 +87,6 @@ These are part of the design. They are not tasks.
   - Why: Adding a text box, a QR code and a barcode in a row puts all three at the same spot (seen on the first browser print). Check what pm220_rp2_webapp did and match it, or place each new object in free space inside the safe area.
   - Done when: e2e: three objects added in a row don't overlap on a 50×30 label.
 
-- [ ] **F11 — The app starts the printer service it needs**
-  - Area: web.
-  - Why: Nothing starts our modules after a boot (B3, and the parent's launchers don't read our `pex` list). After a reboot the app said "no printer_hub · designing only" though both modules sat installed in the PEX partition.
-  - Needs: at boot, when `printer.drivers` is `unknown_op`: `pex.load` + `pex.start` printer_hub, then wait for it (≤ 5 s, once a second). A driver only when it is needed: before connecting a printer of it, and before a scan for its printer family ("Scan for" in the Printers dialog; our drivers are app.json's `pex` list, else nelko_tspl). Before loading a driver, unload our other drivers that have no printer in use (only the driver in hand stays loaded). "Already loaded / running" is success; ops one at a time; a failure shows the board's message and Retry, never a retry loop.
-  - Done when: e2e on the mock (tests/e2e/service.spec.js: boot starts only the hub; a saved PM220's connect loads nelko_tspl first; loading a driver first unloads an idle one, not one with a printer connected; pool full with a printer on the other driver shows the message and Retry; a scan for a family loads its driver; all running sends no pex ops; a hub that won't start shows the message and Retry), and on the bench board after a reboot the app starts hub + driver by itself.
-  - 2026-10-27 bench: with our modules unloaded (the state after a boot), the app sent pex.load + pex.start for printer_hub only, then loaded nelko_pl70e for the saved PL70e and connected; after a real board reboot it did the same. Open: the app loaded nelko_pl70e next to an idle nelko_tspl and the pool fell to 32 bytes, so every print failed ("open failed"); it must unload idle drivers first (in progress).
-
-## Later
-
 - [ ] **F7 — Menus: a traditional menu bar on desktop, a collapsible menu sheet on touch**
   - Area: web.
   - Why: The header and sidebar from pm220 don't scale to printers, label sizes, templates, variables, batch, network and calibration. A menu bar (File, Edit, View, Printer, Label, Network, Calibration, Help) with submenus and tick/untick items is easier to find things in on a desktop. On a touchscreen, small drop-downs and hover submenus work badly. A full-height sheet with collapsible sections is likely better there.
@@ -118,6 +109,16 @@ These are part of the design. They are not tasks.
   - Done when: the decision is recorded here and in architecture.md, and `tools/build.py standalone` / the release notes match it.
 
 ## Done
+
+- [x] **F11 — The app starts the printer service it needs** (2026-10-27)
+  - Area: web.
+  - Why: Nothing starts our modules after a boot (B3, and the parent's launchers don't read our `pex` list). After a reboot the app said "no printer_hub · designing only" though both modules sat installed in the PEX partition.
+  - Needs: at boot, when `printer.drivers` is `unknown_op`: `pex.load` + `pex.start` printer_hub, then wait for it (≤ 5 s, once a second). A driver only when it is needed: before connecting a printer of it, and before a scan for its printer family ("Scan for" in the Printers dialog; our drivers are app.json's `pex` list, else nelko_tspl). Before loading a driver, unload our other drivers that have no printer in use (only the driver in hand stays loaded). "Already loaded / running" is success; ops one at a time; a failure shows the board's message and Retry, never a retry loop.
+  - Done when: e2e on the mock (tests/e2e/service.spec.js: boot starts only the hub; a saved PM220's connect loads nelko_tspl first; loading a driver first unloads an idle one, not one with a printer connected; pool full with a printer on the other driver shows the message and Retry; a scan for a family loads its driver; all running sends no pex ops; a hub that won't start shows the message and Retry), and on the bench board after a reboot the app starts hub + driver by itself.
+  - 2026-10-27 bench: with our modules unloaded (the state after a boot), the app sent pex.load + pex.start for printer_hub only, then loaded nelko_pl70e for the saved PL70e and connected; after a real board reboot it did the same. Open: the app loaded nelko_pl70e next to an idle nelko_tspl and the pool fell to 32 bytes, so every print failed ("open failed"); it must unload idle drivers first (in progress).
+
+## Later
+  - 2026-10-27, after unload-first (a1235c2): the browser tests pass (90/90). On the bench the app auto-connected the BLE PL70e at boot and, asked to scan for PM220s, kept nelko_pl70e (a printer was connected on it) and loaded nelko_tspl beside it (pool 9,440 B left). The unload-an-idle-driver path is covered by the browser tests only.
 
 ## New item
 
