@@ -26,6 +26,7 @@ These are part of the design. They are not tasks.
 - **One driver per protocol family and transport; a model row per printer.** A driver may cover several printers (a model table). A printer that differs a lot gets its own driver. Today: `nelko_tspl` (PM220, P21; Classic SPP), `nelko_pl70e` (PL70e-BT; BLE), `phomemo_d30` (D30; Classic SPP, ESC/POS), `printer_virtual`. See [adding-a-printer.md](adding-a-printer.md).
 - **The web app renders.** It lays out the label, applies calibration and packs the 1-bit bitmap. Drivers only encode and transport it.
 - **Plain ES modules, gzipped, never minified or bundled.** Modules load lazily, so the board's SD route is never asked for many files at once.
+- **Be gentle with the board.** Other clients and WebSockets share it. The app keeps at most 2 HTTP requests in flight (one queue for module loads, presets, settings and files), backs off on `409 busy` / `503`, and our tools never load-test it.
 - **Two modes.** Companion: the parent UI plus our app on the SD card at `/sd/apps/printer/`. Standalone: our app is the only web app. [architecture.md](architecture.md).
 - **Calibration is per printer × label size** and keeps the pm220 fields, names and limits. Old pm220 `settings/print.json` files load in the calibration dialog.
 
@@ -41,8 +42,8 @@ These are part of the design. They are not tasks.
 - [ ] **F2 — Lazy loading**
   - Area: web.
   - Why: The board's `/sd` route serves up to 6 files at once (raised from 2) and answers `503 card busy` beyond that. Too many requests at once may also be dropped. Today app.js imports about 25 modules at boot.
-  - Needs: a small boot graph; dialogs, QR, barcode, image and print code loaded on first use; a loader that retries a refused module; presets and settings fetched one or two at a time; an idle prefetch one file at a time. The mock server limits parallel static requests like the board, and the whole e2e suite runs under it.
-  - Done when: `/sd/apps/printer/` on the bench board loads with zero failed requests in Chromium, and every dialog opens by keyboard.
+  - Needs: a small boot graph; dialogs, QR, barcode, image and print code loaded on first use; one request queue with at most 2 in flight (module loads, presets, settings, files) and backoff on `409 busy` / `503`; an idle prefetch one file at a time, if it's worth it. The mock server refuses a third parallel static request like the board does, and the whole e2e suite runs under it.
+  - Done when: `/sd/apps/printer/` on the bench board loads with zero failed requests in Chromium and never more than 2 requests in flight, and every dialog opens by keyboard.
 
 ## Next
 
