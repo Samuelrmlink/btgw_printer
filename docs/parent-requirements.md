@@ -384,3 +384,7 @@ without a reboot, in either order.
 **What we do on our side** (already, or once this lands): `tools/deploy.py --target sd` writes `sd:/apps/printer/` with `app.json`, `icon.svg`, the app and `ext/index.js` (the switch button, which becomes an `addLauncher` call), with the modules under `sd:/apps/printer/pex/`. Our app shows its "BTGW" button only when the parent says it is there (companion).
 
 **Done when:** on the bench board, with no file of ours on flash, copying `sd:/apps/printer/` to the card and reloading the BTGW UI shows a "Label printer" launcher that opens `/sd/apps/printer/`; after a reboot printer_hub and nelko_tspl are running in manifest order; removing the folder removes the launcher.
+
+**Status 2026-10-27 (parent dev 719b357, `ae55c4c` "Add a toolbar button for a web app that ships its own folder"):**
+- Done: discovery of `apps/<id>/app.json` (or `.gz`) on flash and on the card; its `"label"` is a toolbar button that opens `/sd/apps/<id>/` (the folder is the link; a URL in the file is ignored); `app.addLauncher({id,label,href|onClick})` for code in the page. Seen on the bench board: our `sd:/apps/printer/app.json` gives a "Printer" button to `/sd/apps/printer/`, with nothing of ours on flash.
+- Not part of it (still open, lower priority): `ext` loaded from the app's folder; `pex` start order and autostart from the manifest (R5; on this board `cfg/launch.json` can't be written, B3); an apps window with versions and Remove. We no longer need an extension for the button.

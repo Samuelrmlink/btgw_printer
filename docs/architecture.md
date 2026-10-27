@@ -33,7 +33,7 @@ browser (web/)  --WS /ws + POST /api/op-->  printer_hub (PEX)  --pex_call-->  dr
 | | Companion | Standalone |
 |---|---|---|
 | Firmware base | `btgw/configs/pico2w_sd_classic_defconfig` + `configs/companion.fragment` | `btgw/configs/pico2w_classic_defconfig` + `configs/standalone.fragment` |
-| Parent web UI | kept, plus `js/ext/printer-switch/` (a "Printer" button) | not uploaded |
+| Parent web UI | kept; its "Printer" toolbar button comes from our `apps/printer/app.json` (parent launchers) | not uploaded |
 | Our app | `/printer/` (LittleFS `printer/`), or `/sd/apps/printer/` (card `apps/printer/`, `deploy.py --target sd`; needs parent R2) | `/printer/`; `/` redirects there |
 | Switch button in our app | "BTGW" back to `/` | hidden |
 

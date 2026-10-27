@@ -11,25 +11,19 @@ then writes printer/mode.json, which tells the app whether to show the
 
 --target sd puts the app on the micro SD card instead (PUT /api/sd/files/),
 under --sd-dir (default apps/printer), with mode.json beside it. The files
-stay gzipped, as on flash, so the board's GET /sd/<path> route has to serve
-<path>.gz with Content-Encoding: gzip and <dir>/index.html for a folder
-(docs/parent-requirements.md R2); the app opens at --sd-url (default
-/sd/<sd-dir>/). Files of ours left over in that folder are deleted.
-It also writes the app's registration for the parent UI (R12): app.json,
-icon.svg, ext/index.js (the switch button) and the modules named by --pex
-under <sd-dir>/pex/. The parent UI's switch button
-(js/ext/printer-switch/) still has to live on flash, because the parent loads
-extensions from there; it is rewritten to open --sd-url. Labels, printer
-configs and job files are not moved by this; the app picks their store.
+stay gzipped, as on flash; the board's GET /sd/<path> route serves <path>.gz
+with Content-Encoding: gzip and <dir>/index.html for a folder. The app opens
+at --sd-url (default /sd/<sd-dir>/). Files of ours left over in that folder
+are deleted.
 
-Companion mode never deletes anything: the parent UI and other projects'
-files share the board's flash (the parent's upload_fw_assets.py --sync would
-delete them). In standalone mode --sync removes stale .gz files, but only
-the app's own (printer/**/*.gz outside printer/labels and printer/var, and
-the root index.html.gz); labels, printers.json, media.json and cfg/ are never
-touched.
+It also writes app.json there: the parent UI (bluetooth_rp2_webapp
+web/js/launchers.js) turns every apps/<id>/app.json on the card into a
+toolbar button with its "label", opening /sd/apps/<id>/. The modules named
+by --pex are copied to <sd-dir>/pex/ for installing. With --target sd
+nothing is written outside --sd-dir: no file on flash, nothing the parent
+or another project owns.
 """
-import argparse, gzip, json, os, subprocess, sys, urllib.error, urllib.parse, urllib.request
+import argparse, json, os, subprocess, sys, urllib.error, urllib.parse, urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEEP = ("printer/labels/", "printer/var/")
@@ -69,14 +63,6 @@ def remote_gz(base, d=""):
     return out
 
 
-def fetch(base, path):
-    try:
-        with urllib.request.urlopen("%s/%s" % (base, path), timeout=30) as resp:
-            return resp.read()
-    except urllib.error.HTTPError:
-        return None
-
-
 def put(base, target, rel, data, dry):
     api = "api/sd/files" if target == "sd" else "api/fs"
     print("PUT", ("sd:/" if target == "sd" else "") + rel, "(%d B)" % len(data))
@@ -94,25 +80,16 @@ def put(base, target, rel, data, dry):
             print("  retry (%s)" % e)
 
 
-def point_switch(data, url):
-    """The parent UI's switch button, opening url instead of /printer/."""
-    src = gzip.decompress(data).decode()
-    old = ': "/printer/";'
-    if old not in src:
-        sys.exit("ext/printer-switch/index.js: TARGET line not found")
-    return gzip.compress(src.replace(old, ": %s;" % json.dumps(url), 1).encode(), 9, mtime=0)
-
-
 def manifest(pex):
-    """sd:/apps/printer/app.json, the parent's app registration (R12)."""
+    """sd:/apps/printer/app.json. The parent reads "label" (its toolbar
+    button); the other keys are ours and ignored by the parent."""
     with open(os.path.join(ROOT, "package.json")) as f:
         version = json.load(f).get("version", "0")
     return json.dumps({
-        "id": "printer", "name": "Label printer", "version": version,
+        "label": "Printer", "name": "Label printer", "version": version,
         "description": "Design and print labels on Bluetooth label printers",
-        "entry": "index.html", "icon": "icon.svg", "ext": "ext/index.js",
-        "pex": [{"name": n, "file": "pex/%s.m33.pex" % n} for n in pex],
-        "autostart": True}, indent=1).encode()
+        "entry": "index.html", "icon": "icon.svg",
+        "pex": [{"name": n, "file": "pex/%s.m33.pex" % n} for n in pex]}, indent=1).encode()
 
 
 def remote_sd(base, d):
@@ -169,13 +146,11 @@ def main():
         put(base, "sd", sd_dir + "/mode.json", mode, a.dry_run)
         sent.add(sd_dir + "/mode.json")
         # The app's registration and parts for the parent (R12): manifest,
-        # icon, the switch button as the app's extension, and its modules.
+        # icon and its modules.
         pex = [n for n in a.pex.split(",") if n]
         extra = {"app.json": manifest(pex)}
         with open(os.path.join(ROOT, "ext", "app-icon.svg"), "rb") as f:
             extra["icon.svg"] = f.read()
-        with open(os.path.join(ROOT, "ext", "printer-switch", "index.js"), "rb") as f:
-            extra["ext/index.js"] = f.read()
         for n in pex:
             src = os.path.join(ROOT, "build", "drivers", "pex", n + ".m33.pex")
             if not os.path.exists(src):
@@ -190,24 +165,9 @@ def main():
                 print("DELETE sd:/" + p)
                 if not a.dry_run:
                     req("DELETE", "%s/api/sd/files/%s" % (base, enc(p)))
-        # Off-card files: the switch button (flash only) and, in standalone,
-        # the root redirect. Flash may be full or failing, so warn, don't stop.
-        for rel in sorted(local):
-            if rel.startswith("printer/"):
-                continue
-            body = data(rel)
-            if rel == "js/ext/printer-switch/index.js.gz":
-                body = point_switch(body, sd_url)
-            elif rel == "index.html.gz":
-                body = gzip.compress(gzip.decompress(body).replace(b"/printer/", sd_url.encode()), 9, mtime=0)
-            try:
-                put(base, "flash", rel, body, a.dry_run)
-                # Read it back: a board with a failing LittleFS has answered
-                # OK without keeping the file (parent-requirements B3).
-                if not a.dry_run and fetch(base, "api/fs/" + enc(rel)) != body:
-                    raise OSError("the board answered OK but the file is not there")
-            except (urllib.error.URLError, OSError) as e:
-                print("  warning: %s not written to flash (%s)" % (rel, e), file=sys.stderr)
+        if a.mode == "standalone":
+            print("  note: the root redirect (index.html.gz) is not written with --target sd; "
+                  "open %s directly" % sd_url)
         print("done: %s%s" % (base, sd_url))
         return
     for rel in sorted(local):
