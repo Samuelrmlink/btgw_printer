@@ -55,6 +55,7 @@ These are part of the design. They are not tasks.
   - Why: A label size is made for some models. Switching the printer to another model today swaps the label size without telling the user when it doesn't fit (`setModel` in web/app.js), and the document is re-laid out on the new page.
   - Needs: on a printer switch, check the current label size against the new printer's model (`mediaFor`). If it fits, keep it and its calibration. If not, choose the model's preferred preset (or the label size this printer used last), and say on the status line what changed and why. F4's prompt runs first.
   - Done when: e2e: PM220 with 50×30 → PL70e-BT switches to a 4×6-family size and says so; PM220 → another PM220 keeps 50×30; a size marked for both models is kept.
+  - Done so far (6938af0): each saved printer remembers its label size and orientation (`media`, `orient` in printers.json), and switching to it, or a page load in a clean browser, brings them back. Calibration was already saved per printer and label size.
 
 - [ ] **F4 — Ask before a switch throws away unsaved changes**
   - Area: web.
@@ -86,6 +87,13 @@ These are part of the design. They are not tasks.
   - Area: web.
   - Why: Adding a text box, a QR code and a barcode in a row puts all three at the same spot (seen on the first browser print). Check what pm220_rp2_webapp did and match it, or place each new object in free space inside the safe area.
   - Done when: e2e: three objects added in a row don't overlap on a 50×30 label.
+  - Also (2026-10-27, PL70e 4 × 6): new objects keep their small-label sizes (text 24 px, QR 80 dots, barcode 200 dots) on a 812 × 1218 page, so they come out tiny in a corner. Size new objects in proportion to the safe area. Done when also: on a 4 × 6 a new text box, QR code and barcode are readable sizes (e2e checks a minimum size against the page).
+
+- [ ] **F12 — A printer that stops answering fails the job instead of hanging**
+  - Area: drivers (nelko_pl70e first, then nelko_tspl).
+  - Why: On 2026-10-27 the PL70e stopped answering READSTA after its roll was reloaded. A 3 × 1 job went out in full and never printed; the hub kept it "printing" until the app gave up after 60 s.
+  - Needs: during a job, READSTA (or the model's status query) with no answer for a set time ends the job as failed with "the printer isn't answering", and the status shows that. Use the Nelko app's own timeouts and states (docs/protocols/nelko-states.md). Find out with the owner what the printer needs after a paper load.
+  - Done when: a fakehost test where the printer never answers ends the job failed within the timeout, and the same on the bench with the printer silenced.
 
 - [ ] **F7 — Menus: a traditional menu bar on desktop, a collapsible menu sheet on touch**
   - Area: web.
