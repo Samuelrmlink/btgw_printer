@@ -21,7 +21,9 @@ enum {
     PL70E_ST_NOPAPER,
     PL70E_ST_LIDOPEN,
     PL70E_ST_OVERHEAT,
-    PL70E_ST_PRINTING,       /* ESC !? 0x20 */
+    PL70E_ST_PRINTING,       /* ESC !? 0x20 (busy) or 0x02 (feeding) */
+    PL70E_ST_PAUSED,         /* ESC !? 0x10 */
+    PL70E_ST_ERROR,          /* ESC !? 0x03 paper error, 0x08 ribbon, 0x90 no power */
 };
 const char *pl70e_status_name(int st);
 

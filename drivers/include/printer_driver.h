@@ -76,7 +76,9 @@ enum {
      * job->copies itself from one pass of the rows (TSPL "PRINT n"), 0 if
      * the hub must feed the rows once per copy (job->copy counts), or a
      * negative PEX_E* (PEX_ESTATE: not connected) or PRN_DRV_ENOTREADY to
-     * refuse the job. */
+     * refuse the job. PEX_EAGAIN: not yet (the driver is asking the printer
+     * for a fresh status); the hub calls JOB_BEGIN again on its next ticks,
+     * for up to 5 s, then fails the job. */
     PRN_DRV_JOB_BEGIN = 7,
     /* a0 = const uint8_t *rows, a1 = byte count (always whole rows of
      * job->row_bytes). Returns the bytes taken (whole rows; may be fewer

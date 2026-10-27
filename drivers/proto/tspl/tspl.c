@@ -70,6 +70,9 @@ int tspl_head(char *out, size_t cap, const tspl_job_t *j) {
     puts_(&b, "\r\n");
     if (j->density >= 0) { puts_(&b, "DENSITY "); putd(&b, j->density); puts_(&b, "\r\n"); }
     if (j->speed >= 0) { puts_(&b, "SPEED "); putd(&b, j->speed); puts_(&b, "\r\n"); }
+    if (j->set_gap && j->media != PRN_MEDIA_BLACKMARK) {
+        puts_(&b, j->media == PRN_MEDIA_CONTINUOUS ? "SET GAP OFF\r\n" : "SET GAP ON\r\n");
+    }
     puts_(&b, "CLS\r\n");
     puts_(&b, "BITMAP ");
     putd(&b, j->x);

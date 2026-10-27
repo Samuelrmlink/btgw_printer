@@ -29,6 +29,7 @@ struct fh_ble_peer {
     int nq;
     int stall;
     int drop_done;           /* write-done events to lose (the gateway's event ring drops the oldest when full) */
+    int fail_writes;         /* writes to fail: the data never arrives, the done event carries an error */
     uint8_t val[FH_BLE_CHR_MAX][QDATA];
     uint16_t vlen[FH_BLE_CHR_MAX];
     fh_ble_stats_t st;
@@ -111,6 +112,7 @@ static void link_down(fh_ble_peer_t *p) {
 void fh_ble_peer_disconnect(fh_ble_peer_t *p) { if (p) { link_down(p); } }
 void fh_ble_peer_stall(fh_ble_peer_t *p, int on) { if (p) { p->stall = on; } }
 void fh_ble_peer_drop_write_done(fh_ble_peer_t *p, int n) { if (p) { p->drop_done = n; } }
+void fh_ble_peer_fail_writes(fh_ble_peer_t *p, int n) { if (p) { p->fail_writes = n; } }
 const fh_ble_stats_t *fh_ble_peer_stats(fh_ble_peer_t *p) { return p ? &p->st : NULL; }
 int fh_ble_listeners(void) { return nlis(); }
 
@@ -122,7 +124,11 @@ static void run_ops(fh_ble_peer_t *p) {
         memmove(&p->q[0], &p->q[1], sizeof(op_t) * (size_t)(p->nq - 1));
         p->nq--;
         if (p->nq) { p->q[0].due = now + p->c.op_ms; }
-        if (o.kind == PEX_BT_WRITE) {
+        if (o.kind == PEX_BT_WRITE && p->fail_writes > 0) {
+            /* like the gateway's op timeout (reason 1 << 8): nothing reaches the printer */
+            p->fail_writes--;
+            if (o.want_done) { push(PEX_BT_WRITE, p->addr, o.chr, NULL, 0, 1 << 8); }
+        } else if (o.kind == PEX_BT_WRITE) {
             p->st.writes++;
             p->st.bytes += o.len;
             if (p->c.on_write) { p->c.on_write(p, o.chr, o.d, o.len, o.with_resp, p->c.ctx); }

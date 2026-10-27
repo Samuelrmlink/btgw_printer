@@ -28,6 +28,8 @@ typedef struct {
     uint8_t mm_tenths;       /* 1: SIZE/GAP mm always with one decimal ("14.0"), as
                               * nelko-p21-rs sends them; 0: like %g ("50", "2.5") */
     uint8_t mirror;          /* DIRECTION d,<mirror> */
+    uint8_t set_gap;         /* 1: "SET GAP ON" (gap media) / "SET GAP OFF" (continuous) after
+                              * DENSITY, as the Nelko app's PL70e jobs have it; 0: no line */
 } tspl_job_t;
 
 /* Lengths, or -1 if cap is too small. */

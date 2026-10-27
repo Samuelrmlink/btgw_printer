@@ -15,6 +15,7 @@
 #define MAX_WIDTH 4096
 #define DONE_TIMEOUT_MS 120000u
 #define PROGRESS_MS 250u
+#define BEGIN_WAIT_MS 5000u    /* JOB_BEGIN answering PEX_EAGAIN: ask again for this long */
 
 typedef struct {
     char id[24];
@@ -51,6 +52,7 @@ static struct {
     uint32_t rows_fed;       /* rows taken by the driver in this pass */
     uint32_t sent, total;    /* bytes, over every pass */
     uint32_t t_start, t_progress, t_wait;
+    uint32_t t_begin;        /* first PEX_EAGAIN from JOB_BEGIN, 0: none yet */
     int err;
 } J;
 
@@ -298,6 +300,14 @@ static void rewind_pass(void) {
 
 static void begin_feed(void) {
     int rc = dcall(J.d, PRN_DRV_JOB_BEGIN, P(&J.job), 0, 0);
+    if (rc == PEX_EAGAIN) {
+        /* the driver is checking the printer's status first: ask again on
+         * the next ticks (J.st stays J_SCAN) */
+        uint32_t now = pex_ms();
+        if (!J.t_begin) { J.t_begin = now ? now : 1; }
+        else if (now - J.t_begin > BEGIN_WAIT_MS) { job_end(PRN_JOB_FAILED, "the printer didn't answer before the job"); }
+        return;
+    }
     if (rc < 0) {
         job_end(PRN_JOB_FAILED, rc == PEX_EBUSY ? "printer busy" : rc == PEX_ESTATE ? "not connected"
                 : rc == PRN_DRV_ENOTREADY ? "printer not ready (paper, lid, or not answering: see its status)" : "refused");

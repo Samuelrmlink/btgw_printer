@@ -46,7 +46,7 @@ static int hub_main(const pex_host_t *h, uint32_t r, void *a) { (void)h; (void)r
 typedef struct {
     int width_bytes, height, x, y, mode;
     char size[300], gap[300];
-    int density, copies, prints, cls;
+    int density, copies, prints, cls, set_gap_on;
     uint8_t *page;           /* last BITMAP, as received */
     size_t page_n;
     /* parser */
@@ -80,6 +80,8 @@ static void sim_line(const char *l) {
         S.density = atoi(l + 8);
     } else if (!strcmp(l, "CLS")) {
         S.cls++;
+    } else if (!strcmp(l, "SET GAP ON")) {
+        S.set_gap_on++;
     } else if (!strncmp(l, "PRINT ", 6)) {
         const char *c = strchr(l, ',');
         S.copies = c ? atoi(c + 1) : atoi(l + 6);
@@ -331,7 +333,9 @@ static void t_print_refused_no_paper(void) {
     fh_run(500);
     prn_job_t j;
     fill_job(&j, 104, 10);
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), PRN_DRV_ENOTREADY);
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), PEX_EAGAIN);         /* asks first, like the app */
+    fh_run(300);
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), PRN_DRV_ENOTREADY);  /* still out of paper */
 }
 
 static void t_cancel_pads_bitmap(void) {
@@ -444,6 +448,126 @@ static void t_quiet_printer_refuses_a_job(void) {
     CHECK_EQ(drv(PRN_DRV_CANCEL, 0, 0, 0), PEX_OK);
     CHECK(fh_run_until(got_done, NULL, 10000));
     fh_run(2000);
+}
+
+/* The ESC !? byte is a code (the Nelko app's table), with the TSPL bits as
+ * a fallback for bytes outside it. */
+static void t_status_codes(void) {
+    CHECK_EQ(pl70e_status_from_byte(0x00), PL70E_ST_READY);
+    CHECK_EQ(pl70e_status_from_byte(0x30), PL70E_ST_READY);      /* low battery: prints */
+    CHECK_EQ(pl70e_status_from_byte(0x01), PL70E_ST_LIDOPEN);
+    CHECK_EQ(pl70e_status_from_byte(0x02), PL70E_ST_PRINTING);
+    CHECK_EQ(pl70e_status_from_byte(0x20), PL70E_ST_PRINTING);
+    CHECK_EQ(pl70e_status_from_byte(0x04), PL70E_ST_NOPAPER);
+    CHECK_EQ(pl70e_status_from_byte(0x24), PL70E_ST_NOPAPER);
+    CHECK_EQ(pl70e_status_from_byte(0x06), PL70E_ST_NOPAPER);    /* orbsa: 0x02 rides along */
+    CHECK_EQ(pl70e_status_from_byte(0x10), PL70E_ST_PAUSED);
+    CHECK_EQ(pl70e_status_from_byte(0x80), PL70E_ST_OVERHEAT);
+    CHECK_EQ(pl70e_status_from_byte(0x03), PL70E_ST_ERROR);
+    CHECK_EQ(pl70e_status_from_byte(0x90), PL70E_ST_ERROR);
+    pl70e_rx_t rx = { 0 };
+    uint8_t b = 0x90;
+    CHECK_EQ(pl70e_rx_feed(&rx, &b, 1), PL70E_ST_ERROR);         /* a lone high byte is a status too */
+}
+
+/* A write the gateway reports failed never reached the printer. Mid-BITMAP
+ * that leaves the printer waiting for image bytes and deaf to READSTA: the
+ * job fails, white fills the gap, and the printer answers again. */
+static void t_failed_write_resyncs_the_printer(void) {
+    setup(1, 185);
+    connect_printer();
+    fh_run(200);
+    prn_job_t j;
+    fill_job(&j, 76, 203);
+    uint8_t *page = make_page(76, 203);
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK(drv(PRN_DRV_JOB_FEED, (uint32_t)page, 76 * 20, 0) > 0);
+    fh_ble_peer_fail_writes(S.p, 1);
+    int rc = feed_all(page, 76 * 203, 76);
+    CHECK(rc == 0 || rc == PEX_ESTATE);       /* the job may already have failed under it */
+    CHECK(fh_run_until(got_done, NULL, 10000));
+    CHECK_EQ(s_done_outcome, PRN_JOB_FAILED);
+    CHECK_HAS(s_done_msg, "didn't reach the printer");
+    fh_run(8000);
+    CHECK_EQ(S.bmp_left, 0u);                 /* the printer's BITMAP is complete */
+    CHECK_EQ(S.prints, 0);                    /* and nothing printed */
+    char st[512];
+    CHECK(drv(PRN_DRV_STATUS, 0, (uint32_t)st, sizeof st) > 0);
+    CHECK_HAS(st, "\"printer\":\"ready\"");   /* READSTA answered again */
+    CHECK_HAS(st, "\"writes_failed\":1");
+    /* and the next job prints whole */
+    s_done = 0;
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(feed_all(page, 76 * 203, 76), 0);
+    CHECK_EQ(drv(PRN_DRV_JOB_END, 0, 0, 0), PEX_OK);
+    CHECK(fh_run_until(got_done, NULL, 30000));
+    CHECK_EQ(s_done_outcome, PRN_JOB_OK);
+    CHECK(S.page && S.page_n == (size_t)76 * 203 && !memcmp(S.page, page, S.page_n));
+    CHECK_EQ(S.prints, 1);
+    CHECK(S.set_gap_on >= 1);                 /* the app's SET GAP ON is in every job */
+    free(page);
+}
+
+/* Like the app: a job only on a fresh "ready", and not straight after an
+ * error clears (paper reloaded). PEX_EAGAIN asks the hub to call again. */
+static void t_job_waits_for_a_fresh_ready(void) {
+    setup(1, 185);
+    connect_printer();
+    fh_run(200);
+    S.status = 1;
+    fh_run(6000);
+    prn_job_t j;
+    fill_job(&j, 104, 10);
+    int rc = drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0);
+    CHECK(rc == PRN_DRV_ENOTREADY || rc == PEX_EAGAIN);   /* out of paper (asking again if it's old news) */
+    S.status = 0;                              /* paper back in */
+    /* call again like the hub, every tick: it asks, then lets it settle */
+    int again = 0, refused = 0;
+    uint32_t t0 = fh_now(), ready_at = 0;
+    while ((rc = drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0)) != 1 && fh_now() - t0 < 10000) {
+        again += rc == PEX_EAGAIN;
+        refused += rc == PRN_DRV_ENOTREADY;
+        if (!ready_at && strstr(s_last_status, "\"printer\":\"ready\"")) { ready_at = fh_now(); }
+        fh_run(20);
+    }
+    CHECK_EQ(rc, 1);
+    CHECK(again > 0);
+    CHECK_EQ(refused, 0);                      /* the old "no paper" didn't refuse it */
+    CHECK(ready_at && fh_now() - ready_at >= 1400);   /* it settled after turning ready */
+    CHECK_EQ(drv(PRN_DRV_CANCEL, 0, 0, 0), PEX_OK);
+    CHECK(fh_run_until(got_done, NULL, 10000));
+    fh_run(2000);
+}
+
+/* A printer left inside a BITMAP (here: the link dropped mid-job) answers
+ * nothing; connecting with "recover":"resync" fills the BITMAP with white
+ * and it answers again. */
+static void t_recover_resync(void) {
+    setup(1, 185);
+    connect_printer();
+    fh_run(200);
+    prn_job_t j;
+    fill_job(&j, 104, 300);
+    uint8_t *page = make_page(104, 300);
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK(drv(PRN_DRV_JOB_FEED, (uint32_t)page, 104 * 30, 0) > 0);
+    fh_run(1000);
+    fh_ble_peer_disconnect(S.p);
+    CHECK(fh_run_until(got_done, NULL, 10000));
+    CHECK(S.bmp_left > 0);                     /* stuck */
+    drv(PRN_DRV_DISCONNECT, 0, 0, 0);
+    fh_run(500);
+    s_last_state[0] = 0;
+    CHECK_EQ(drv(PRN_DRV_CONNECT, (uint32_t)ADDR, (uint32_t)"{\"recover\":\"resync\"}", 0), PEX_EPENDING);
+    CHECK(fh_run_until(connected, NULL, 20000));
+    fh_run(60000);
+    CHECK_EQ(S.bmp_left, 0u);
+    CHECK_EQ(S.prints, 0);
+    char st[512];
+    CHECK(drv(PRN_DRV_STATUS, 0, (uint32_t)st, sizeof st) > 0);
+    CHECK_HAS(st, "\"printer\":\"ready\"");
+    CHECK(fh_log_has("recover step"));
+    free(page);
 }
 
 /* The gateway's module event ring drops the oldest event when it overflows,
@@ -573,6 +697,10 @@ int main(void) {
     RUN(t_silent_printer_fails_the_job);
     RUN(t_busy_printer_times_out_ok);
     RUN(t_quiet_printer_refuses_a_job);
+    RUN(t_status_codes);
+    RUN(t_failed_write_resyncs_the_printer);
+    RUN(t_job_waits_for_a_fresh_ready);
+    RUN(t_recover_resync);
     RUN(t_lost_write_event);
     RUN(t_stop_releases);
     RUN(t_print_through_real_hub);
