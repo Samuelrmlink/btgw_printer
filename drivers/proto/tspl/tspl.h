@@ -5,7 +5,8 @@
  * With the PM220's settings the bytes are the same as the old firmware's
  * tspl_build_job() (pm220_rp2_webapp src/printer/tspl.c); test_tspl checks
  * that byte for byte. Everything that file fixed at compile time is a
- * field here. */
+ * field here. mm_tenths and mirror give the P21's text, byte for byte as
+ * nelko-p21-rs sends it (test_p21). */
 #ifndef TSPL_H
 #define TSPL_H
 
@@ -24,6 +25,9 @@ typedef struct {
     uint16_t row_bytes;
     uint32_t rows;
     int copies;              /* PRINT n */
+    uint8_t mm_tenths;       /* 1: SIZE/GAP mm always with one decimal ("14.0"), as
+                              * nelko-p21-rs sends them; 0: like %g ("50", "2.5") */
+    uint8_t mirror;          /* DIRECTION d,<mirror> */
 } tspl_job_t;
 
 /* Lengths, or -1 if cap is too small. */

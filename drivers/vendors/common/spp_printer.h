@@ -14,7 +14,7 @@
 #include "printer_driver.h"
 
 typedef struct {
-    const char *driver;          /* module name, e.g. "nelko_p21" */
+    const char *driver;          /* module name, e.g. "phomemo_d30" */
     const char *model;           /* model id in the caps */
     const char *name_prefix;     /* inquiry filter, e.g. "P21" */
     uint32_t cod_mask, cod_value;/* inquiry filter on Class of Device (0 = any) */

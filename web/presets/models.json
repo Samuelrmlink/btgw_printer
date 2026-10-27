@@ -3,7 +3,7 @@
  "note": "Fallback model caps for designing with no board or no driver loaded. A loaded driver's printer.drivers caps replace these. drivers/test/test_caps.c checks that every field here matches the driver's own caps. Values listed in \"unconfirmed\" come from references, not from a printer on the bench.",
  "drivers": [
   {
-   "driver": "nelko_pm220",
+   "driver": "nelko_tspl",
    "abi": 1,
    "models": [
     {
@@ -43,6 +43,47 @@
      ],
      "speed": null,
      "copies": true
+    },
+    {
+     "id": "p21",
+     "vendor": "Nelko",
+     "name": "P21",
+     "transport": "classic",
+     "dpi": 203,
+     "head_dots": 96,
+     "min_len_mm": 15,
+     "max_len_mm": 100,
+     "media": [
+      "gap",
+      "continuous"
+     ],
+     "density": {
+      "min": 1,
+      "max": 15,
+      "default": 8
+     },
+     "black_bit": 0,
+     "placement": false,
+     "status": [
+      "battery",
+      "paper",
+      "lid",
+      "media"
+     ],
+     "unconfirmed": [
+      "density"
+     ],
+     "presets": [
+      "nelko-p21-14x40",
+      "nelko-p21-12x40",
+      "nelko-p21-14x50",
+      "nelko-p21-14x75",
+      "nelko-p21-15x30",
+      "nelko-p21-14x30"
+     ],
+     "speed": null,
+     "copies": false,
+     "orientation": "along_feed"
     }
    ]
   },
@@ -85,53 +126,6 @@
       "nelko-2x1"
      ],
      "copies": true
-    }
-   ]
-  },
-  {
-   "driver": "nelko_p21",
-   "abi": 1,
-   "models": [
-    {
-     "id": "p21",
-     "vendor": "Nelko",
-     "name": "P21",
-     "transport": "classic",
-     "dpi": 203,
-     "head_dots": 96,
-     "min_len_mm": 15,
-     "max_len_mm": 100,
-     "media": [
-      "gap",
-      "continuous"
-     ],
-     "density": {
-      "min": 1,
-      "max": 15,
-      "default": 8
-     },
-     "black_bit": 0,
-     "placement": false,
-     "status": [
-      "battery",
-      "paper",
-      "lid",
-      "media"
-     ],
-     "unconfirmed": [
-      "density"
-     ],
-     "presets": [
-      "nelko-p21-14x40",
-      "nelko-p21-12x40",
-      "nelko-p21-14x50",
-      "nelko-p21-14x75",
-      "nelko-p21-15x30",
-      "nelko-p21-14x30"
-     ],
-     "speed": null,
-     "copies": false,
-     "orientation": "along_feed"
     }
    ]
   },

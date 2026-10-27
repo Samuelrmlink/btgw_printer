@@ -3,7 +3,7 @@
  *
  * Several modules link into one test binary. Each is compiled with its own
  * names for the entry points, e.g.
- *   -Dpex_main=pm220__pex_main -Dprn_drv=pm220__prn_drv
+ *   -Dpex_main=nelko__pex_main -Dprn_drv=nelko__prn_drv
  * and registered with fh_module(), and its exports with fh_export(). Module
  * code must not have other non-static globals with clashing names; shared
  * libraries (drivers/core, drivers/proto) are linked once and must be

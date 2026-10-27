@@ -9,8 +9,10 @@ $(BUILD)/lib/%.o: $(ROOT)/%.c $(GEN)/pex_api.h
 # Modules, each with its own entry point names.
 $(eval $(call module,hub,$(ROOT)/drivers/hub/printer_hub.c))
 $(eval $(call module,virt,$(ROOT)/drivers/virtual/virtual.c))
-$(eval $(call module,pm220,$(ROOT)/drivers/vendors/nelko/pm220/pm220.c $(ROOT)/drivers/vendors/nelko/pm220/pm220_proto.c))
-MODS_OBJ := $(hub_OBJ) $(virt_OBJ) $(pm220_OBJ)
+# Nelko TSPL (PM220, P21): one driver, tested per model by test_pm220.c,
+# test_p21.c and test_nelko_scan.c
+$(eval $(call module,nelko,$(ROOT)/drivers/vendors/nelko/tspl/nelko_tspl.c $(ROOT)/drivers/vendors/nelko/tspl/nelko_proto.c))
+MODS_OBJ := $(hub_OBJ) $(virt_OBJ) $(nelko_OBJ)
 
 # The old PM220 firmware's TSPL and layout code, renamed so it links next to ours.
 OLD_RENAME := -Dtspl_build_job=old_tspl_build_job -Dtspl_mm_to_dots=old_tspl_mm_to_dots \
@@ -24,11 +26,10 @@ OLD_OBJ += $(BUILD)/ref/old_fs_stub.o
 EXTRA_OBJ_tspl := $(OLD_OBJ)
 EXTRA_OBJ_pm220 := $(OLD_OBJ)
 
-# Nelko P21 and Phomemo D30 (feature/p21-d30)
-$(eval $(call module,p21,$(ROOT)/drivers/vendors/nelko/p21/p21_app.c $(ROOT)/drivers/vendors/nelko/p21/p21_proto.c))
+# Phomemo D30 (feature/p21-d30)
 $(eval $(call module,d30,$(ROOT)/drivers/vendors/phomemo/d30/d30_app.c $(ROOT)/drivers/vendors/phomemo/d30/d30_proto.c))
-MODS_OBJ += $(p21_OBJ) $(d30_OBJ)
-CFLAGS += -DGOLDEN_DIR='"$(ROOT)/drivers/vendors/nelko/p21/test"'
+MODS_OBJ += $(d30_OBJ)
+CFLAGS += -DGOLDEN_DIR='"$(ROOT)/drivers/vendors/nelko/tspl/test"'
 # header dependencies (an included .inc.c change must rebuild its module)
 CFLAGS += -MMD -MP
 -include $(shell find $(BUILD) -name '*.d' 2>/dev/null)

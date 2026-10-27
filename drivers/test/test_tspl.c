@@ -38,7 +38,7 @@ static size_t new_job(const cal_case_t *cc, const uint8_t *src, int sw, int sh, 
     if (!n) { return 0; }
     tspl_job_t j = { "\x1b!o\r\n", 5000, 3000, (uint32_t)cc->gap_mm100, PRN_MEDIA_GAP, 203, 8, -1, 0,
                      L.origin_x, L.origin_y, (uint16_t)((L.print_width_dots + 7) / 8),
-                     (uint32_t)L.print_height_dots, 1 };
+                     (uint32_t)L.print_height_dots, 1, 0, 0 };
     int h = tspl_head((char *)out, cap, &j);
     if (h < 0) { return 0; }
     memcpy(out + h, crop, n);
@@ -137,16 +137,16 @@ static void t_small_sources(void) {
 /* Settings the old firmware never sent: our output for them, pinned. */
 static void t_other_settings(void) {
     char b[256];
-    tspl_job_t j = { NULL, 10160, 15240, 300, PRN_MEDIA_GAP, 203, 12, 4, 0, 0, 0, 104, 1218, 2 };
+    tspl_job_t j = { NULL, 10160, 15240, 300, PRN_MEDIA_GAP, 203, 12, 4, 0, 0, 0, 104, 1218, 2, 0, 0 };
     tspl_head(b, sizeof b, &j);
     CHECK_STR(b, "SIZE 101.6 mm,152.4 mm\r\nGAP 3 mm,0 mm\r\nDIRECTION 0,0\r\nDENSITY 12\r\nSPEED 4\r\nCLS\r\n"
                  "BITMAP 0,0,104,1218,1,");
     tspl_tail(b, sizeof b, &j);
     CHECK_STR(b, "\r\nPRINT 2\r\n");
-    j = (tspl_job_t){ NULL, 4800, 0, 0, PRN_MEDIA_CONTINUOUS, 203, -1, -1, 1, 8, 0, 48, 400, 1 };
+    j = (tspl_job_t){ NULL, 4800, 0, 0, PRN_MEDIA_CONTINUOUS, 203, -1, -1, 1, 8, 0, 48, 400, 1, 0, 0 };
     tspl_head(b, sizeof b, &j);
     CHECK_STR(b, "SIZE 48 mm,50.05 mm\r\nGAP 0 mm,0 mm\r\nDIRECTION 1,0\r\nCLS\r\nBITMAP 8,0,48,400,1,");
-    j = (tspl_job_t){ "\x1b!o\r\n", 4000, 3000, 250, PRN_MEDIA_BLACKMARK, 203, 0, -1, 0, 0, 0, 40, 240, 1 };
+    j = (tspl_job_t){ "\x1b!o\r\n", 4000, 3000, 250, PRN_MEDIA_BLACKMARK, 203, 0, -1, 0, 0, 0, 40, 240, 1, 0, 0 };
     tspl_head(b, sizeof b, &j);
     CHECK_STR(b, "\x1b!o\r\nSIZE 40 mm,30 mm\r\nBLINE 2.5 mm,0 mm\r\nDIRECTION 0,0\r\nDENSITY 0\r\nCLS\r\n"
                  "BITMAP 0,0,40,240,1,");

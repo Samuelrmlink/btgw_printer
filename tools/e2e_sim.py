@@ -24,8 +24,10 @@ SKIP = 77
 
 # printer -> (sim spec, driver module, model, media preset, sim pane name prefix, connect config)
 PRINTERS = {
-    "pm220": ("pm220,pin=1234,addr=C0:55:00:00:01:20", "nelko_pm220", "pm220", "nelko-pm220-50x30", "C0:55:00:00:01:20", {}),
-    "p21": ("p21,addr=C0:55:00:00:01:21", "nelko_p21", "p21", "nelko-p21-14x40", "C0:55:00:00:01:21", {}),
+# (nelko_tspl drives both Nelko TSPL models: the PM220 connect leaves the model
+# to the inquiry name, the P21 one names it as a saved printer does)
+    "pm220": ("pm220,pin=1234,addr=C0:55:00:00:01:20", "nelko_tspl", "pm220", "nelko-pm220-50x30", "C0:55:00:00:01:20", {}),
+    "p21": ("p21,addr=C0:55:00:00:01:21", "nelko_tspl", "p21", "nelko-p21-14x40", "C0:55:00:00:01:21", {"model": "p21"}),
     "d30": ("d30,addr=C0:55:00:00:01:22", "phomemo_d30", "d30", "phomemo-d30-12x40", "C0:55:00:00:01:22", {}),
     "pl70e": ("pl70e,addr=C0:55:00:00:02:20", "nelko_pl70e", "pl70e", "nelko-4x6", "C0:55:00:00:02:20", {}),
 }

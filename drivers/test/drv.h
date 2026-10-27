@@ -7,8 +7,8 @@ int hub__pex_main(const pex_host_t *, uint32_t, void *);
 int hub__prn_hub(uint32_t, uint32_t, uint32_t, uint32_t);
 int virt__pex_main(const pex_host_t *, uint32_t, void *);
 int virt__prn_drv(uint32_t, uint32_t, uint32_t, uint32_t);
-int pm220__pex_main(const pex_host_t *, uint32_t, void *);
-int pm220__prn_drv(uint32_t, uint32_t, uint32_t, uint32_t);
+int nelko__pex_main(const pex_host_t *, uint32_t, void *);
+int nelko__prn_drv(uint32_t, uint32_t, uint32_t, uint32_t);
 
 static inline pex_mod_t *load_hub(void) {
     pex_mod_t *m = fh_module("printer_hub", hub__pex_main);
@@ -24,9 +24,10 @@ static inline pex_mod_t *load_virtual(void) {
     fh_start(m, NULL);
     return m;
 }
-static inline pex_mod_t *load_pm220(void) {
-    pex_mod_t *m = fh_module("nelko_pm220", pm220__pex_main);
-    fh_export(m, "prn_drv", (void *)pm220__prn_drv);
+/* nelko_tspl: the Nelko TSPL driver (PM220, P21) */
+static inline pex_mod_t *load_nelko(void) {
+    pex_mod_t *m = fh_module("nelko_tspl", nelko__pex_main);
+    fh_export(m, "prn_drv", (void *)nelko__prn_drv);
     fh_load(m);
     fh_start(m, NULL);
     return m;

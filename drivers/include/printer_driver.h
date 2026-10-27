@@ -121,7 +121,7 @@ typedef struct {
 } prn_job_t;
 
 /* Caps JSON a driver returns from PRN_DRV_INFO:
- * {"driver":"nelko_pm220","abi":1,
+ * {"driver":"nelko_tspl","abi":1,
  *  "models":[{"id":"pm220","vendor":"Nelko","name":"PM220","transport":"classic",
  *    "dpi":203,"head_dots":384,"min_len_mm":10,"max_len_mm":200,
  *    "media":["gap","continuous"],"density":{"min":0,"max":15,"default":8},
@@ -132,6 +132,7 @@ typedef struct {
  * head_dots wide with the origin baked in, and origin is [0,0].
  * web/presets/models.json is the web app's copy of every driver's caps;
  * drivers/test/test_caps.c fails when the two disagree.
+ * A driver with several models lists each (nelko_tspl: pm220, p21).
  * "speed" is null when the printer takes no speed command. The hub caches
  * id, black_bit and the density/speed ranges of up to four models per driver
  * and clamps job settings to them. Preset ids are media profile ids from the

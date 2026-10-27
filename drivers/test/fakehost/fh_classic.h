@@ -17,6 +17,8 @@ typedef struct {
     uint32_t cod;            /* Class of Device */
     int8_t rssi;
     int name_by_rnr;         /* 1: the name only comes from a remote name request */
+    uint32_t rnr_ms;         /* how long after the inquiry result that name comes (default 60);
+                              * it may land after the inquiry has ended */
     uint8_t sdp_channel;     /* channel of the SPP record; 0: no record */
     int sdp_fails;           /* 1: the SDP query itself fails */
     const char *pin;         /* legacy PIN the peer wants; NULL: SSP just-works */

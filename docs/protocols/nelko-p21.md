@@ -23,9 +23,10 @@ The differences are a 96-dot head, a 14 mm wide label, and SSP without a PIN.
 | The current Android app scans BLE for `P21` / `P31S` and uses MTU 247 (23 on some Android 14 boards) | medium | [A] |
 | SoC: Jieli AC6951C (BR23); NFC reader YC5018 for the roll tag | high | [M] |
 
-**Our choice:** the driver uses **Classic SPP** (`pex_bt_classic_open`, uuid 0x1101, fallback
-channel 1, no PIN list needed but `"0000"` is harmless, `drop_key` on). It's faster than 20-byte
-GATT writes and matches the PM220 driver. A BLE path (`ff00`/`ff02`/`ff01`) can be added later
+**Our choice:** the P21 is the `p21` model of the `nelko_tspl` driver
+(`drivers/vendors/nelko/tspl/`), the same driver as the PM220. It uses **Classic SPP**
+(`pex_bt_classic_open`, uuid 0x1101, fallback channel 1, no PIN list needed but `"0000"` and
+`"1234"` are harmless, `drop_key` on). It's faster than 20-byte GATT writes. A BLE path (`ff00`/`ff02`/`ff01`) can be added later
 if a firmware turns out to be BLE-only; the protocol bytes are identical.
 
 ## Framing
@@ -137,3 +138,17 @@ The printer doesn't require a tag: covered tags still print. The "DRM" is app-si
 4. What is the DENSITY default and its useful range on this unit?
 5. Pacing: a 3.4 KB job in one RFCOMM stream; is there any flow-control trouble (the BLE path
    has `ff03` credits)?
+
+## As implemented (`nelko_tspl`, model `p21`)
+
+What differs from the PM220 row, all flags in `MODELS[]`:
+
+- Find: a name that starts with `P21` (any case).
+- After connecting: `CONFIG?`, `BATTERY?`, then `ESC !o` for the roll's size. `BATTERY?` every 25 s.
+- The status byte is a code (table above), not bits. `printer.status` adds `"printer"`, the code's name (`"ready"`, `"no_paper"`, ...).
+- `ESC !?` goes without CRLF.
+- Before a job: `ESC !?`. An error code fails the job with its name (`no_paper`); busy (0x20) or feeding (0x02) waits up to 10 s; no answer in 1.5 s prints anyway.
+- The job text is nelko-p21-rs's, byte for byte (`test_p21.c`, `t_job_golden`): mm with one decimal, `DIRECTION 1,1`, `BITMAP 0,0`, `GAP 5.0 mm` when the media gives no gap.
+- The bitmap must be 96 dots wide (`placement` false).
+- Copies: the hub feeds the rows once per copy; each copy has its own head and `PRINT 1`.
+- After the job: `ESC !?` again. An error code fails the job; no answer in 15 s counts as done.

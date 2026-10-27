@@ -1,6 +1,8 @@
 # Nelko PM220: protocol as implemented
 
-Driver: `drivers/vendors/nelko/pm220/` (module `nelko_pm220`).
+Driver: `drivers/vendors/nelko/tspl/` (module `nelko_tspl`, model `pm220`).
+The same driver runs the P21 (`docs/protocols/nelko-p21.md`): one firmware
+family, one model row each in `MODELS[]`.
 
 ## Sources
 
@@ -14,7 +16,8 @@ Bluetooth Classic SPP. The printer's USB-C only charges.
 
 | Step | What the driver does | Origin |
 |---|---|---|
-| Find | Inquiry. Keeps a device named `PM220` (anywhere in the name, any case), or one with no name yet and Class of Device major class 6 (imaging). Names that start with other models (`P21`) are left for their drivers. | `bt_core.c` `looks_like_printer()`, narrowed to this model |
+| Find | Inquiry. Claims a device named `PM220` (anywhere in the name, any case) as a PM220, or one whose name starts with `P21` as a P21. A device with no name yet and Class of Device major class 6 (imaging) is held until the inquiry ends, plus 2 s for late names; if it still has no name, it is reported with `"model":null`. A name that matches no model (`PL70e-BT_6CC5`) is never claimed. | `bt_core.c` `looks_like_printer()`, narrowed to the name |
+| Model | The connect config's `model`, else the inquiry name, else `pm220` with a `printer.log` line. A job's `model` overrides it. | |
 | Service | SDP for the Serial Port UUID 0x1101. Falls back to channel 1. A channel that worked before (from the config) skips SDP. | `bt_core.c` |
 | Pairing | Legacy PIN, tried in this order: a PIN that worked before (config `pin`), then `0000`, then `1234`. SSP just-works if the printer asks for SSP. | `bt_core.c` (`0000`, retried with `1234`) |
 | Stale key | When the printer has forgotten the bond, the host drops its key and pages again once (`drop_key`). | `bt_core.c` `connect_failed()` |
@@ -36,13 +39,14 @@ All lines end in CRLF.
 |---|---|---|
 | `BATTERY?` | `BATTERY ` + 1 byte BCD percent + 1 byte charging + CRLF | `battery`, `charging` |
 | `CONFIG?` | `CONFIG ` + dpi (u16 BE) + hw (3 bytes) + fw (3 bytes) + [settings] + CRLF | `dpi`, `hw`, `fw` (`x.y.z`) |
-| `ESC !?` | 1 byte: bit 0 lid open, bit 2 out of paper, bit 5 busy (0 = ready) | `lid`, `paper`, `busy` |
+| `ESC !?` CRLF | 1 byte: bit 0 lid open, bit 2 out of paper, bit 5 busy (0 = ready) | `lid`, `paper`, `busy` |
 | `ESC !o` | 16 bytes: [0] readiness, [7] paper type (0 continuous, 1 gap, 2 black mark), [11] label length mm, [13] label width mm (RFID), [14..15] CRC-16/MODBUS of [0..13], big-endian | `media` |
 
 After connecting the driver asks `CONFIG?`, `BATTERY?` and `ESC !?`, one at a
 time, waiting up to 1.8 s for each. A reply with no terminator is closed by
-200 ms of silence. Parsers: `pm220_proto.c`, with vectors from the Python
-tests in `test_pm220.c` (`t_proto_vectors`).
+200 ms of silence. Parsers: `nelko_proto.c`, with vectors from the Python
+tests in `test_pm220.c` (`t_proto_vectors`). `BATTERY ` is followed by one
+space only: 20 % is the BCD byte 0x20, a space.
 
 ## Print job
 
@@ -77,4 +81,4 @@ has left the RFCOMM TX buffer. The PM220 reports no "printed" event.
 
 - Speed. The old firmware never set it, so the caps say `"speed":null`.
 - Whether the PM220 prints black-mark media. `BLINE` is standard TSPL and is sent if asked; it is not tried on hardware.
-- Hardware validation of this module. The PM220 was off. Everything here is checked against the simulated printer in `drivers/test/test_pm220.c`.
+- Hardware validation of this module. The PM220 was off. Everything here is checked against the simulated printer in `drivers/test/test_pm220.c` and mcusim (`tools/e2e_sim.py pm220`).

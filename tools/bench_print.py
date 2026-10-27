@@ -71,11 +71,16 @@ def main():
             f.write(b"P4\n%d %d\n" % (wb * 8, h) + bytes(b ^ 0xff for b in rows))
     if a.dry:
         return
-    url = "http://%s/api/fs/%s" % (a.host, a.path)
-    try:
-        urllib.request.urlopen(urllib.request.Request("http://%s/api/fs/printer/var/" % a.host, method="PUT", data=b""), timeout=10)
-    except Exception:
-        pass
+    # sd/... is the card (/api/sd/files, parents made by the PUT); anything
+    # else is flash, whose folder may need making first.
+    if a.path.startswith("sd/"):
+        url = "http://%s/api/sd/files/%s" % (a.host, a.path[3:])
+    else:
+        url = "http://%s/api/fs/%s" % (a.host, a.path)
+        try:
+            urllib.request.urlopen(urllib.request.Request("http://%s/api/fs/printer/var/" % a.host, method="PUT", data=b""), timeout=10)
+        except Exception:
+            pass
     r = urllib.request.urlopen(urllib.request.Request(url, method="PUT", data=rows), timeout=60)
     print("PUT", a.path, r.status)
     ws = WS(a.host)

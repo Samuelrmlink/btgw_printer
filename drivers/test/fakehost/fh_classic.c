@@ -24,6 +24,7 @@ struct fh_cl_peer {
     int peer_key;            /* the peer holds a link key for us */
     int absent, stall;
     int handle;              /* the session RFCOMM is open on, or 0 */
+    uint32_t name_due;       /* when the remote name request answers, or 0 */
     fh_cl_stats_t st;
 };
 
@@ -31,7 +32,7 @@ static fh_cl_peer_t s_peers[PEERS];
 static int s_npeers;
 static uint8_t s_host_key[PEERS];   /* indexed like s_peers */
 static int s_inq_count;
-static uint32_t s_inq_end, s_inq_note_at, s_inq_rnr_at;
+static uint32_t s_inq_end, s_inq_note_at;
 
 /* the standalone SDP lookup */
 static pex_mod_t *s_sdp_mod;
@@ -341,20 +342,23 @@ static void pump_tx(void) {
 }
 
 static void inquiry(void) {
-    if (!cl_inq_active()) { return; }
     uint32_t now = fh_now();
+    /* remote name requests run on after the inquiry */
+    for (int i = 0; i < s_npeers; i++) {
+        fh_cl_peer_t *p = &s_peers[i];
+        if (p->name_due && (int32_t)(now - p->name_due) >= 0) {
+            p->name_due = 0;
+            if (!p->absent) { cl_inq_set_name(p->addr, p->name); }
+        }
+    }
+    if (!cl_inq_active()) { return; }
     if (s_inq_note_at && (int32_t)(now - s_inq_note_at) >= 0) {
         s_inq_note_at = 0;
         for (int i = 0; i < s_npeers; i++) {
             fh_cl_peer_t *p = &s_peers[i];
             if (p->absent) { continue; }
             cl_inq_note(p->addr, p->c.rssi ? p->c.rssi : -60, p->c.cod, p->c.name_by_rnr ? NULL : p->name);
-        }
-    }
-    if (s_inq_rnr_at && (int32_t)(now - s_inq_rnr_at) >= 0) {
-        s_inq_rnr_at = 0;
-        for (int i = 0; i < s_npeers; i++) {
-            if (!s_peers[i].absent && s_peers[i].c.name_by_rnr) { cl_inq_set_name(s_peers[i].addr, s_peers[i].name); }
+            if (p->c.name_by_rnr) { p->name_due = (now + (p->c.rnr_ms ? p->c.rnr_ms : 60u)) | 1u; }
         }
     }
     if (s_inq_end && (int32_t)(now - s_inq_end) >= 0) { cl_inq_stop(); }
@@ -443,7 +447,7 @@ void fh_classic_reset(void) {
     memset(s_act, 0, sizeof s_act);
     s_npeers = 0;
     s_inq_count = 0;
-    s_inq_end = s_inq_note_at = s_inq_rnr_at = 0;
+    s_inq_end = s_inq_note_at = 0;
     s_sdp_busy = 0;
     s_sdp_mod = NULL;
 }
@@ -472,7 +476,6 @@ int pex_bt_classic_scan(uint32_t ms) {
     if (!ms) { ms = 10240; }
     s_inq_end = fh_now() + ms;
     s_inq_note_at = fh_now() + (ms < 300 ? ms / 2 : 300);
-    s_inq_rnr_at = s_inq_note_at + 60;
     return PEX_OK;
 }
 void pex_bt_classic_scan_stop(void) { cl_inq_stop(); }

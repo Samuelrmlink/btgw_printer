@@ -23,7 +23,14 @@ static void putd(buf_t *b, long v) {
     while (k) { t[n++] = d[--k]; }
     put(b, t, (size_t)n);
 }
-static void putmm(buf_t *b, uint32_t mm100) {
+static void putmm(buf_t *b, uint32_t mm100, int tenths) {
+    if (tenths) {
+        uint32_t v = (mm100 + 5u) / 10u;
+        char t[2] = { '.', (char)('0' + v % 10u) };
+        putd(b, (long)(v / 10u));
+        put(b, t, 2);
+        return;
+    }
     char t[16];
     int n = prn_fmt_mm100(t, sizeof t, (int32_t)mm100);
     put(b, t, (size_t)n);
@@ -43,22 +50,24 @@ int tspl_head(char *out, size_t cap, const tspl_job_t *j) {
         h = ((uint32_t)j->rows * 2540u + dpi / 2u) / dpi;
     }
     puts_(&b, "SIZE ");
-    putmm(&b, j->width_mm100);
+    putmm(&b, j->width_mm100, j->mm_tenths);
     puts_(&b, " mm,");
-    putmm(&b, h);
+    putmm(&b, h, j->mm_tenths);
     puts_(&b, " mm\r\n");
     if (j->media == PRN_MEDIA_BLACKMARK) {
         puts_(&b, "BLINE ");
-        putmm(&b, j->gap_mm100);
+        putmm(&b, j->gap_mm100, j->mm_tenths);
         puts_(&b, " mm,0 mm\r\n");
     } else {
         puts_(&b, "GAP ");
-        putmm(&b, j->media == PRN_MEDIA_CONTINUOUS ? 0 : j->gap_mm100);
+        putmm(&b, j->media == PRN_MEDIA_CONTINUOUS ? 0 : j->gap_mm100, j->mm_tenths);
         puts_(&b, " mm,0 mm\r\n");
     }
     puts_(&b, "DIRECTION ");
     putd(&b, j->direction);
-    puts_(&b, ",0\r\n");
+    puts_(&b, ",");
+    putd(&b, j->mirror);
+    puts_(&b, "\r\n");
     if (j->density >= 0) { puts_(&b, "DENSITY "); putd(&b, j->density); puts_(&b, "\r\n"); }
     if (j->speed >= 0) { puts_(&b, "SPEED "); putd(&b, j->speed); puts_(&b, "\r\n"); }
     puts_(&b, "CLS\r\n");

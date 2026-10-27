@@ -16,8 +16,17 @@ browser (web/)  --WS /ws + POST /api/op-->  printer_hub (PEX)  --pex_call-->  dr
 - **printer_hub** owns every `printer.*` op and event, so the parent's 16-op
   table isn't spent once per driver. It keeps the driver registry and streams
   job files to drivers.
-- **Drivers** are PEX apps, one per vendor family. The contract is in
+- **Drivers** are PEX apps, one per protocol family and transport. A driver
+  covers several models through a model table; a printer that is much
+  different gets its own driver. The contract is in
   `drivers/include/printer_driver.h`.
+
+| Driver | Protocol, transport | Models | Source |
+|---|---|---|---|
+| `nelko_tspl` | Nelko TSPL, Classic SPP | `pm220`, `p21` | `drivers/vendors/nelko/tspl/` |
+| `nelko_pl70e` | Nelko TSPL, BLE | `pl70e` | `drivers/vendors/nelko/pl70e/` |
+| `phomemo_d30` | ESC/POS raster, Classic SPP | `d30` | `drivers/vendors/phomemo/d30/` |
+| `printer_virtual` | none (tests) | `virtual` | `drivers/virtual/` |
 
 ## Modes
 
@@ -57,7 +66,7 @@ must stay under ~960 bytes and replies under ~2.8 KB (parent limits).
 | `printer.devices` | `{"driver"?}` | `{"devices":[{"driver","addr","name","rssi","model","transport"}]}` |
 | `printer.connect` | `{"driver","addr","config"?:{...}}` | `{"pending":true}` |
 | `printer.disconnect` | `{"driver"?,"addr"?}` | `{"ok":true}` |
-| `printer.status` | `{"driver"?,"addr"?}` | `{"printers":[{"driver","addr","model","state","why"?,"battery"?,"charging"?,"paper"?,"lid"?,"busy"?,"media"?:{"type","w_mm","h_mm"},"dpi"?,"fw"?}],"job":{"job","state","driver","copy","copies","sent","total"}|null}` |
+| `printer.status` | `{"driver"?,"addr"?}` | `{"printers":[{"driver","addr","model","state","why"?,"battery"?,"charging"?,"paper"?,"lid"?,"busy"?,"printer"?,"media"?:{"type","w_mm","h_mm"},"dpi"?,"fw"?}],"job":{"job","state","driver","copy","copies","sent","total"}|null}` |
 | `printer.print` | see below | `{"job":id}` or error `busy` / `not_connected` / `bad_request` |
 | `printer.cancel` | `{"job"?}` | `{"ok":true}` |
 
@@ -77,8 +86,10 @@ the model's `black_bit` (0 for the Nelko models: 0 = black, 1 = white).
 `density`/`speed` are clamped to the model's ranges (-1 or absent = the
 model's default; a model with `"speed":null` gets no speed command).
 `media.h_mm` 0 or absent means continuous media. `options` is passed to the
-driver as it is (PM220: `{"preflight":false}` skips the ESC !? check before
-the job; virtual: `rate`, `fail_at`, `no_file`).
+driver as it is (`nelko_tspl`: `{"preflight":false}` skips the ESC !? check
+before the job; virtual: `rate`, `fail_at`, `no_file`). `model` picks the
+model in a driver with several; `nelko_tspl` follows it even when the connect
+guessed another.
 
 The hub reads the file once to see whether it is all black (and if so clears
 the first dot of every 16th row, the old firmware's head protection), then
@@ -94,7 +105,7 @@ input/output cases for the JavaScript port to match.
 
 | Event | Data |
 |---|---|
-| `printer.found` | `{"driver","addr","name","rssi","model"}` |
+| `printer.found` | `{"driver","addr","name","rssi","model"}`; `model` is null when the driver can't tell (a device with no name: the user picks) |
 | `printer.state` | `{"driver","addr","model","state":"idle|scanning|connecting|pairing|connected|waiting|printing","why"?,"pin"?,"channel"?,"retry_ms"?}` |
 | `printer.status` | one printer's status object (as in `printer.status`), sent when a reply from the printer changes it |
 | `printer.job` | `{"job","state":"queued|sending|printing|done|failed|cancelled","copy","copies","sent","total","message"?}` |
@@ -105,7 +116,9 @@ them on as `printer.<kind>`. `state` `waiting` means the link dropped and a
 reconnect is due in `retry_ms` (8 s, doubling to 60 s). A Classic driver
 reports the `pin` and `channel` that worked: save them in the printer's
 config (`printers.json`) and pass that config to `printer.connect`, and the
-next connect tries that PIN first and skips SDP. When a driver registers,
+next connect tries that PIN first and skips SDP. Put the printer's `model`
+in that config too: a driver with several models takes it from there (else
+from the inquiry name, else its first model, with a `printer.log` line). When a driver registers,
 the hub connects every printer in `printer/printers.json` with that driver
 and `auto_reconnect` not false, passing its whole entry as the config.
 

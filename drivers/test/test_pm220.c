@@ -1,4 +1,4 @@
-/* The PM220 driver end to end on the fake host: printer_hub + nelko_pm220 +
+/* The PM220 model of nelko_tspl end to end on the fake host: printer_hub + nelko_tspl +
  * a simulated PM220 on the Classic radio (legacy PIN, SPP on channel 1, the
  * status replies the real one gives, a TSPL job parser).
  *
@@ -11,7 +11,7 @@
 #include "core/prn_core.h"
 #include "ref/layout.h"
 #include "ref/old_fs_stub.h"
-#include "vendors/nelko/pm220/pm220_proto.h"
+#include "vendors/nelko/tspl/nelko_proto.h"
 
 static char R[3000];
 #define ADDR "11:22:33:44:55:66"
@@ -71,7 +71,7 @@ static void sim_parse(void) {
             uint8_t st[16];
             memcpy(st, STATUS16, 16);
             st[0] = S.ready;
-            uint16_t c = pm_crc16_modbus(st, 14);
+            uint16_t c = nk_crc16_modbus(st, 14);
             st[14] = (uint8_t)(c >> 8);
             st[15] = (uint8_t)c;
             reply(st, 16);
@@ -142,13 +142,13 @@ static void setup(const char *pin, uint32_t rate) {
     fh_reset();
     add_pm220(pin, rate);
     load_hub();
-    load_pm220();
+    load_nelko();
     fh_run(20);
 }
 
 static int connect_pm220(const char *cfg) {
     char p[300];
-    snprintf(p, sizeof p, "{\"driver\":\"nelko_pm220\",\"addr\":\"" ADDR "\",\"config\":%s}", cfg ? cfg : "{}");
+    snprintf(p, sizeof p, "{\"driver\":\"nelko_tspl\",\"addr\":\"" ADDR "\",\"config\":%s}", cfg ? cfg : "{}");
     int from = fh_events("printer.state");
     CHECK(fh_op("printer.connect", p, R, sizeof R) > 0);
     return wait_ev_after(from, "printer.state", "\"connected\"", NULL, 3000);
@@ -166,18 +166,22 @@ static void t_scan_filters(void) {
     fh_cl_peer_add(&headset);
     fh_cl_peer_add(&quiet);
     load_hub();
-    load_pm220();
+    load_nelko();
     fh_run(10);
     CHECK(fh_op("printer.scan", "{\"ms\":2000}", R, sizeof R) > 0);
-    CHECK_STR(R, "{\"started\":[\"nelko_pm220\"]}");
+    CHECK_STR(R, "{\"started\":[\"nelko_tspl\"]}");
     CHECK(wait_ev("printer.found", ADDR, NULL, 1000));
-    fh_run(2200);
+    CHECK(wait_ev("printer.found", ADDR, "\"model\":\"pm220\"", 10));
+    /* the inquiry (2 s), then the wait for late names (2 s) */
+    fh_run(4300);
     CHECK(fh_op("printer.devices", "{}", R, sizeof R) > 0);
     CHECK_HAS(R, "\"addr\":\"" ADDR "\",\"name\":\"PM220\"");
-    CHECK_HAS(R, "\"name\":\"PM220-9F\"");
-    CHECK(!strstr(R, "P21-ABCD"));
+    CHECK_HAS(R, "\"name\":\"PM220-9F\",\"rssi\":-60,\"model\":\"pm220\"");
+    /* the P21 is the same driver's other model now */
+    CHECK_HAS(R, "\"name\":\"P21-ABCD\",\"rssi\":-60,\"model\":\"p21\"");
     CHECK(!strstr(R, "Headset"));
     CHECK_EQ(fh_cl_inquiries(), 1);
+    CHECK_EQ(fh_events("printer.found"), 3);
     CHECK_HAS(fh_event_last("printer.state"), "\"idle\"");
 }
 
@@ -276,7 +280,7 @@ static int print_layout(const ref_cal_t *cal, const char *gap, int copies, ref_l
     /* the hub punches an all-black bitmap itself: send it unpunched */
     fh_fs_put("lfs:/printer/var/job.bin", s_crop, n);
     char p[500];
-    snprintf(p, sizeof p, "{\"driver\":\"nelko_pm220\",\"addr\":\"" ADDR "\",\"model\":\"pm220\","
+    snprintf(p, sizeof p, "{\"driver\":\"nelko_tspl\",\"addr\":\"" ADDR "\",\"model\":\"pm220\","
                           "\"path\":\"printer/var/job.bin\",\"width_dots\":%d,\"rows\":%d,\"origin\":[%d,%d],"
                           "\"media\":{\"w_mm\":50,\"h_mm\":30,\"gap_mm\":%s,\"type\":\"gap\"},\"copies\":%d}",
              L->print_width_dots, L->print_height_dots, L->origin_x, L->origin_y, gap, copies);
@@ -326,7 +330,7 @@ static void t_copies_and_settings(void) {
     size_t n = ref_crop(&L, s_src, 48, 384, 240, s_crop, sizeof s_crop);
     fh_fs_put("lfs:/printer/var/job.bin", s_crop, n);
     char p[500];
-    snprintf(p, sizeof p, "{\"driver\":\"nelko_pm220\",\"model\":\"pm220\",\"path\":\"printer/var/job.bin\","
+    snprintf(p, sizeof p, "{\"driver\":\"nelko_tspl\",\"model\":\"pm220\",\"path\":\"printer/var/job.bin\","
                           "\"width_dots\":%d,\"rows\":%d,\"origin\":[%d,%d],\"media\":{\"w_mm\":40,\"h_mm\":30,"
                           "\"gap_mm\":2.5,\"type\":\"blackmark\"},\"density\":99,\"speed\":3,\"copies\":3,\"rotate\":2}",
              L.print_width_dots, L.print_height_dots, L.origin_x, L.origin_y);
@@ -355,7 +359,7 @@ static void t_stream_under_backpressure(void) {
         for (size_t i = 0; i < n; i++) { rows[i] = (uint8_t)(i * 131u + (i >> 9)); }
         fh_fs_put("lfs:/printer/var/job.bin", rows, n);
         char p[400];
-        snprintf(p, sizeof p, "{\"driver\":\"nelko_pm220\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"
+        snprintf(p, sizeof p, "{\"driver\":\"nelko_tspl\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"
                               "\"rows\":%d,\"media\":{\"w_mm\":48,\"type\":\"continuous\"},\"options\":{\"preflight\":false}}",
                  ROWS[t]);
         CHECK(fh_op("printer.print", p, R, sizeof R) > 0);
@@ -394,7 +398,7 @@ static void t_link_lost_mid_job(void) {
     uint8_t *rows = calloc(1, n);
     memset(rows, 0x5A, n);
     fh_fs_put("lfs:/printer/var/job.bin", rows, n);
-    CHECK(fh_op("printer.print", "{\"driver\":\"nelko_pm220\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"
+    CHECK(fh_op("printer.print", "{\"driver\":\"nelko_tspl\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"
                                  "\"rows\":2000,\"media\":{\"w_mm\":48,\"h_mm\":250}}", R, sizeof R) > 0);
     fh_run(300);
     fh_cl_peer_close(S.p);
@@ -407,7 +411,7 @@ static void t_link_lost_mid_job(void) {
     fh_run(2000);
     if (getenv("DBG")) { fh_verbose(1); }
     int from = fh_events("printer.job");
-    CHECK(fh_op("printer.print", "{\"driver\":\"nelko_pm220\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"
+    CHECK(fh_op("printer.print", "{\"driver\":\"nelko_tspl\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"
                                  "\"rows\":2000,\"media\":{\"w_mm\":48,\"h_mm\":250}}", R, sizeof R) > 0);
     CHECK(wait_ev_after(from, "printer.job", "\"done\"", NULL, 20000));
     fh_verbose(0);
@@ -422,7 +426,7 @@ static void t_cancel(void) {
     uint8_t *rows = malloc(n);
     memset(rows, 0xA5, n);
     fh_fs_put("lfs:/printer/var/job.bin", rows, n);
-    CHECK(fh_op("printer.print", "{\"driver\":\"nelko_pm220\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"
+    CHECK(fh_op("printer.print", "{\"driver\":\"nelko_tspl\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"
                                  "\"rows\":2000,\"media\":{\"w_mm\":48,\"h_mm\":250}}", R, sizeof R) > 0);
     fh_run(500);
     CHECK(fh_op("printer.cancel", "{}", R, sizeof R) > 0);
@@ -439,16 +443,16 @@ static void t_preflight_refuses(void) {
     fh_run(3000);
     ref_cal_t cal = { 203, 5000, 3000, -125, 300, 0, 0, 0 };
     ref_layout_t L;
-    S.ready = PM_READY_LID;
+    S.ready = NK_READY_LID;
     CHECK(print_layout(&cal, "2", 1, &L) > 0);
     CHECK(wait_ev("printer.job", "\"failed\"", "lid open", 3000));
-    S.ready = PM_READY_PAPER;
+    S.ready = NK_READY_PAPER;
     int from = fh_events("printer.job");
     CHECK(print_layout(&cal, "2", 1, &L) > 0);
     CHECK(wait_ev_after(from, "printer.job", "\"failed\"", "out of paper", 3000));
     CHECK_EQ(S.jobs, 0);
     /* busy for a moment, then ready: it waits and prints */
-    S.ready = PM_READY_BUSY;
+    S.ready = NK_READY_BUSY;
     from = fh_events("printer.job");
     CHECK(print_layout(&cal, "2", 1, &L) > 0);
     fh_run(1700);
@@ -476,11 +480,11 @@ static void t_without_classic(void) {
     fh_reset();
     fh_disable_group("classic");
     load_hub();
-    load_pm220();
+    load_nelko();
     fh_run(20);
     CHECK(fh_op("printer.drivers", "{}", R, sizeof R) > 0);
     CHECK_HAS(R, "\"available\":false");
-    CHECK(fh_op("printer.connect", "{\"driver\":\"nelko_pm220\",\"addr\":\"" ADDR "\"}", R, sizeof R) < 0);
+    CHECK(fh_op("printer.connect", "{\"driver\":\"nelko_tspl\",\"addr\":\"" ADDR "\"}", R, sizeof R) < 0);
     CHECK(fh_op("printer.scan", "{}", R, sizeof R) > 0);
     CHECK_STR(R, "{\"started\":[]}");
 }
@@ -489,14 +493,14 @@ static void t_unload_releases(void) {
     fh_reset();
     add_pm220("0000", 20);
     load_hub();
-    pex_mod_t *m = load_pm220();
+    pex_mod_t *m = load_nelko();
     fh_run(10);
     CHECK(connect_pm220(NULL));
     CHECK_EQ(fh_cl_sessions(), 1);
     size_t n = 48u * 2000u;
     uint8_t *rows = calloc(1, n);
     fh_fs_put("lfs:/printer/var/job.bin", rows, n);
-    CHECK(fh_op("printer.print", "{\"driver\":\"nelko_pm220\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"
+    CHECK(fh_op("printer.print", "{\"driver\":\"nelko_tspl\",\"path\":\"printer/var/job.bin\",\"width_dots\":384,"
                                  "\"rows\":2000,\"media\":{\"w_mm\":48,\"h_mm\":250}}", R, sizeof R) > 0);
     fh_run(200);
     fh_unload(m);
@@ -508,63 +512,67 @@ static void t_unload_releases(void) {
 }
 
 static void t_proto_vectors(void) {
-    pm_battery_t b;
-    CHECK(pm_parse_battery((const uint8_t *)"BATTERY \x75\x00\r\n", 11, &b));
+    nk_battery_t b;
+    CHECK(nk_parse_battery((const uint8_t *)"BATTERY \x75\x00\r\n", 11, &b));
     CHECK_EQ(b.percent, 75);
     CHECK_EQ(b.charging, 0);
-    CHECK(pm_parse_battery((const uint8_t *)"BATTERY \x99\x01\r\n", 11, &b));
+    CHECK(nk_parse_battery((const uint8_t *)"BATTERY \x99\x01\r\n", 11, &b));
     CHECK_EQ(b.percent, 99);
     CHECK_EQ(b.charging, 1);
-    CHECK(pm_parse_battery((const uint8_t *)"BATTERY \xff\r\n", 10, &b));
+    CHECK(nk_parse_battery((const uint8_t *)"BATTERY \xff\r\n", 10, &b));
     CHECK_EQ(b.percent, 255);
-    CHECK(!pm_parse_battery((const uint8_t *)"CONFIG", 6, &b));
-    pm_config_t c;
-    CHECK(pm_parse_config((const uint8_t *)"CONFIG \x00\xcb\x00\x00\x03\x04\x02\x04\x02\x01\r\n", 19, &c));
+    CHECK(!nk_parse_battery((const uint8_t *)"CONFIG", 6, &b));
+    /* 20 % is BCD 0x20, a space: only the one after the word is skipped */
+    CHECK(nk_parse_battery((const uint8_t *)"BATTERY \x20\x00\r\n", 11, &b));
+    CHECK_EQ(b.percent, 20);
+    CHECK_EQ(b.charging, 0);
+    nk_config_t c;
+    CHECK(nk_parse_config((const uint8_t *)"CONFIG \x00\xcb\x00\x00\x03\x04\x02\x04\x02\x01\r\n", 19, &c));
     CHECK_EQ(c.dpi, 203);
     CHECK_STR(c.hw, "0.0.3");
     CHECK_STR(c.fw, "4.2.4");
     CHECK_EQ(c.settings, 2);
     static const uint8_t live[16] = { 0x00, 0x0c, 0x01, 0x22, 0x03, 0x00, 0x03, 0x01,
                                       0x06, 0x12, 0x15, 0x1e, 0x0f, 0x32, 0xe6, 0x1f };
-    pm_status_t s;
-    CHECK(pm_parse_status(live, 16, &s));
+    nk_status_t s;
+    CHECK(nk_parse_status(live, 16, &s));
     CHECK_EQ(s.readiness, 0);
     CHECK_EQ(s.paper, 1);
     CHECK_EQ(s.width_mm, 50);
     CHECK_EQ(s.length_mm, 30);
     CHECK_EQ(s.crc_ok, 1);
-    CHECK(!pm_parse_status(live, 13, &s));
+    CHECK(!nk_parse_status(live, 13, &s));
     /* the accumulator: replies split across packets, back to back, and junk */
-    pm_rx_t rx = { { 0 }, 0 };
-    pm_reply_t r;
-    pm_rx_push(&rx, (const uint8_t *)"BATT", 4);
-    CHECK_EQ(pm_rx_take(&rx, PM_BATTERY, 0, &r), 0);
-    pm_rx_push(&rx, (const uint8_t *)"ERY \x42\x01\r\nCONFIG \x00\xcb", 15);
-    CHECK(pm_rx_take(&rx, PM_BATTERY, 0, &r) > 0);
-    CHECK_EQ(r.kind, PM_BATTERY);
+    nk_rx_t rx = { { 0 }, 0 };
+    nk_reply_t r;
+    nk_rx_push(&rx, (const uint8_t *)"BATT", 4);
+    CHECK_EQ(nk_rx_take(&rx, NK_BATTERY, 0, &r), 0);
+    nk_rx_push(&rx, (const uint8_t *)"ERY \x42\x01\r\nCONFIG \x00\xcb", 15);
+    CHECK(nk_rx_take(&rx, NK_BATTERY, 0, &r) > 0);
+    CHECK_EQ(r.kind, NK_BATTERY);
     CHECK_EQ(r.u.battery.percent, 42);
-    CHECK_EQ(pm_rx_take(&rx, PM_CONFIG, 0, &r), 0);
-    pm_rx_push(&rx, (const uint8_t *)"\x00\x00\x03\x04\x02\x04\x02\x01\r\n", 10);
-    CHECK(pm_rx_take(&rx, PM_CONFIG, 0, &r) > 0);
-    CHECK_EQ(r.kind, PM_CONFIG);
-    pm_rx_push(&rx, live, 10);
-    CHECK_EQ(pm_rx_take(&rx, PM_STATUS, 0, &r), 0);
-    pm_rx_push(&rx, live + 10, 6);
-    CHECK(pm_rx_take(&rx, PM_STATUS, 0, &r) > 0);
-    CHECK_EQ(r.kind, PM_STATUS);
+    CHECK_EQ(nk_rx_take(&rx, NK_CONFIG, 0, &r), 0);
+    nk_rx_push(&rx, (const uint8_t *)"\x00\x00\x03\x04\x02\x04\x02\x01\r\n", 10);
+    CHECK(nk_rx_take(&rx, NK_CONFIG, 0, &r) > 0);
+    CHECK_EQ(r.kind, NK_CONFIG);
+    nk_rx_push(&rx, live, 10);
+    CHECK_EQ(nk_rx_take(&rx, NK_STATUS, 0, &r), 0);
+    nk_rx_push(&rx, live + 10, 6);
+    CHECK(nk_rx_take(&rx, NK_STATUS, 0, &r) > 0);
+    CHECK_EQ(r.kind, NK_STATUS);
     CHECK_EQ(r.u.status.width_mm, 50);
-    pm_rx_push(&rx, (const uint8_t *)"\x00", 1);
-    CHECK(pm_rx_take(&rx, PM_READY, 0, &r) > 0);
-    CHECK_EQ(r.kind, PM_READY);
+    nk_rx_push(&rx, (const uint8_t *)"\x00", 1);
+    CHECK(nk_rx_take(&rx, NK_READY, 0, &r) > 0);
+    CHECK_EQ(r.kind, NK_READY);
     CHECK_EQ(r.u.ready, 0);
-    pm_rx_push(&rx, (const uint8_t *)"zz?", 3);
-    CHECK_EQ(pm_rx_take(&rx, PM_NONE, 0, &r), 0);
-    CHECK(pm_rx_take(&rx, PM_NONE, 1, &r) > 0);
+    nk_rx_push(&rx, (const uint8_t *)"zz?", 3);
+    CHECK_EQ(nk_rx_take(&rx, NK_NONE, 0, &r), 0);
+    CHECK(nk_rx_take(&rx, NK_NONE, 1, &r) > 0);
     CHECK_EQ(rx.n, 0);
     /* an unasked status still counts when its CRC is right */
-    pm_rx_push(&rx, live, 16);
-    CHECK(pm_rx_take(&rx, PM_NONE, 0, &r) > 0);
-    CHECK_EQ(r.kind, PM_STATUS);
+    nk_rx_push(&rx, live, 16);
+    CHECK(nk_rx_take(&rx, NK_NONE, 0, &r) > 0);
+    CHECK_EQ(r.kind, NK_STATUS);
 }
 
 int main(void) {

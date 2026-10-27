@@ -34,6 +34,31 @@ web-port merged, then reconciled.
   - `pex/debug/` with it.
 - **TSPL height for continuous media** uses 32-bit math.
 
+## nelko_tspl merge (2026-10-27)
+
+The rule: every driver is a PEX module; one driver per protocol family and
+transport; a driver may cover several models through a model table.
+
+- **`nelko_pm220` and `nelko_p21` are now one module, `nelko_tspl`** (`drivers/vendors/nelko/tspl/`).
+  - It is pm220.c, with a model row each in `MODELS[]`: `pm220`, `p21`. A P22 is one more row.
+  - A row has the id, the name rule, the head width, the density range, the PINs, the caps object, and flags for what differs (placement, copies, status byte as bits or codes, a check after the job, ESC !? with or without CRLF, the P21 job text, ESC !o on connect).
+  - `pm220_proto.c` is `nelko_proto.c` (prefix `nk_`). It also has the P21 status names now. `p21_app.c` and `p21_proto.c` are gone.
+  - The P21 job text comes from `proto/tspl` with two new fields: `mm_tenths` ("14.0 mm") and `mirror` (`DIRECTION 1,1`). The nelko-p21-rs golden files still match byte for byte.
+  - `spp_printer.inc.c` stays, for the D30.
+- **Matching (found on the bench):** pm220.c claimed any unnamed device of Class of Device major class 6. The bench PL70e-BT (Classic DC:0D:30:89:6C:C5, CoD 0x040680) shows up unnamed and gets its name "PL70e-BT_6CC5" a moment later, so it was reported as a PM220.
+  - Now a device is claimed only when a model's name rule matches ("PM220" anywhere, "P21" at the start, any case).
+  - An unnamed imaging device is held until the inquiry ends, plus 2 s for late names. If it still has no name it is reported once, with `"model":null`. `printer.devices` uses the same rule.
+  - Connect takes the model from the config's `model`, else the inquiry name, else the first model (and says so in `printer.log`). A job's `model` overrides it.
+  - The fake host's remote name requests now have a delay (`rnr_ms`) and may land after the inquiry. `test_nelko_scan.c` covers these cases.
+- **Changes the P21 sees** (it was on `spp_printer.inc.c`):
+  - an `ESC !?` check before the job, as the PM220 has;
+  - `printer.status` fields as documented: `paper` and `lid` are booleans, `fw` replaces `firmware`, `printer` is the status code's name; the roll's colour and code are no longer reported;
+  - the keepalive asks `BATTERY?` only.
+- **Size:** `nelko_tspl.m33.pex` 14,564 B (bss 1,436) against `nelko_pm220` 12,188 B (bss 1,376) plus `nelko_p21` 10,904 B (bss 2,384).
+- `web/presets/models.json` has one `nelko_tspl` entry with both models. Media preset ids are unchanged. `test_caps` also checks that `printer.drivers` stays under 2.8 KB (2,193 B now).
+- mcusim, `tools/e2e_sim.py pm220 p21` with `nelko_tspl`: 0 dots differ for both. The PM220 connect had no model in its config and got `pm220` from the inquiry name; PIN 1234 worked on the second attempt.
+- Saved printers with `"driver":"nelko_pm220"` or `"nelko_p21"`: the web app loads them as `nelko_tspl` with their model (`web/store.js`). The hub's auto-connect reads `printers.json` itself, so it skips them until the web app has saved the file once.
+
 ## End to end in mcusim
 
 `tools/e2e_sim.py` (`tools/run_tests.py sim`):

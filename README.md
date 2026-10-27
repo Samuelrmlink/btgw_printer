@@ -18,10 +18,15 @@ successor of [pm220_rp2_webapp](https://github.com/Samuelrmlink/pm220_rp2_webapp
 
 ## Printers
 
-| Vendor | Model | Transport | Status |
-|---|---|---|---|
-| Nelko | PL70e-BT | BLE | planned |
-| Nelko | PM220 | Bluetooth Classic SPP | driver done (feature/nelko-pm220), tested in simulation; hardware pending |
+One driver per protocol family and transport; a driver covers several
+models through a model table.
+
+| Vendor | Model | Transport | Driver | Status |
+|---|---|---|---|---|
+| Nelko | PM220 | Bluetooth Classic SPP | `nelko_tspl` | tested in simulation (mcusim) |
+| Nelko | P21 | Bluetooth Classic SPP | `nelko_tspl` | tested in simulation (mcusim) |
+| Nelko | PL70e-BT | BLE | `nelko_pl70e` | tested in simulation (mcusim) |
+| Phomemo | D30 | Bluetooth Classic SPP | `phomemo_d30` | tested in simulation (mcusim) |
 
 ## Branches
 

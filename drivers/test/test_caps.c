@@ -7,8 +7,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-int p21__pex_main(const pex_host_t *, uint32_t, void *);
-int p21__prn_drv(uint32_t, uint32_t, uint32_t, uint32_t);
 int d30__pex_main(const pex_host_t *, uint32_t, void *);
 int d30__prn_drv(uint32_t, uint32_t, uint32_t, uint32_t);
 int pl70e__pex_main(const pex_host_t *, uint32_t, void *);
@@ -76,12 +74,15 @@ static void t_caps_match_web(void) {
     fh_reset();
     load_hub();
     load_virtual();
-    load_pm220();
-    load("nelko_p21", p21__pex_main, p21__prn_drv);
+    load_nelko();
     load("phomemo_d30", d30__pex_main, d30__prn_drv);
     load("nelko_pl70e", pl70e__pex_main, pl70e__prn_drv);
     fh_run(1200);
-    CHECK(fh_op("printer.drivers", "{}", R, sizeof R) > 0);
+    int len = fh_op("printer.drivers", "{}", R, sizeof R);
+    CHECK(len > 0);
+    /* the parent's op replies stay under ~2.8 KB (docs/architecture.md) */
+    printf("printer.drivers: %d bytes\n", len);
+    CHECK(len < 2800);
     static const char *fields[] = { "transport", "dpi", "head_dots", "black_bit", "placement", "copies",
                                     "density", "speed", "media", "presets", "min_len_mm", "max_len_mm" };
     int models = 0;
