@@ -6,7 +6,6 @@ prn_add_module(nelko_ble
     SOURCES ${_d}/nelko_ble.c ${_r}/vendors/nelko/tspl/nelko_proto.c ${_r}/core/prn_core.c ${_r}/proto/tspl/tspl.c
     INCLUDES ${PRN_INCLUDE} ${_r}
     TARGETS m33
-    MODEL reloc
     KIND app
     VERSION 0.1.0
     DESCRIPTION "Nelko TSPL printers over BLE: P21"

@@ -59,7 +59,8 @@ typedef struct {
     const char *caps;
 } model_t;
 
-static const model_t MODELS[] = {
+/* PEX_PTR_TABLE: tables of pointers live in RW under model B (pex.h) */
+static PEX_PTR_TABLE model_t MODELS[] = {
     { "p21", "P21", 96, 1, 15,
       "{\"id\":\"p21\",\"vendor\":\"Nelko\",\"name\":\"P21\",\"transport\":\"ble\","
       "\"dpi\":203,\"head_dots\":96,\"min_len_mm\":15,\"max_len_mm\":100,\"media\":[\"gap\",\"continuous\"],"
@@ -383,7 +384,7 @@ static int pump_one(uint32_t now) {
 }
 
 static void send_query(int kind) {
-    static const char *const q[] = { "", "BATTERY?\r\n", "CONFIG?\r\n", "\x1b!?", "\x1b!o\r\n" };
+    static PEX_PTR_TABLE const char *q[] = { "", "BATTERY?\r\n", "CONFIG?\r\n", "\x1b!?", "\x1b!o\r\n" };
     const char *s = q[kind];
     uint32_t n = (uint32_t)strlen(s);
     if (s_pad_left || s_pad_crlf || tx_room() < n) { return; }
