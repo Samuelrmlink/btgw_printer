@@ -81,6 +81,10 @@ Results (2026-10-26, standalone image 835,680 B, parent b397a84, mcusim feature/
 
 A full run takes about 25 minutes of wall time.
 
+`--pex-model pic --install` runs the same with model B modules installed into
+the PEX partition after boot and run in place, plus a reinstall and pool check
+per driver: docs/notes/pex-model-b.md.
+
 ## Open
 
 - The simulated PM220 rejects the PIN with HCI 0x05 and the firmware reports why rfcomm. A real PM220 may differ; the driver now copes with both.

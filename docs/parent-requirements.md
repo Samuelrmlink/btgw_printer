@@ -414,6 +414,10 @@ without a reboot, in either order.
 
 **Nice, same area:** `pex.list` reports, per loaded instance, the **code base and RW base addresses** (and `pex.installed` the flash address, not only the partition offset). A debugger or a probe script then maps globals from the module's ELF with one lookup per load, for both models. Today a module has to log `&some_static` itself.
 
+**Found building our modules as model B with clang** (feature/pex-model-b, docs/notes/pex-model-b.md; host build, mcusim only):
+- **The SDK's model B has no C library headers.** `pex_add_module(... MODEL pic)` calls clang with `--target=thumbv*-none-eabi` and no sysroot, so `#include <string.h>` fails; model A gets newlib's headers from gcc. We add `-isystem $(arm-none-eabi-gcc -print-sysroot)/include` in `prn_add_module()`. The SDK could do the same for every `pic` module (it already asks `PEX_GCC` for libgcc), or ship a small `string.h` over the host API's `memcpy`/`strlen`/....
+- **The addresses are already there:** `pex.info` (`mod_json(..., full=true)` in `pex_load.c`) has `code_addr` and `rw_addr`; `pex.list` uses `full=false` and leaves them out. Moving those two fields into the short form is the whole change for the `pex.list` item above. Our modules log both once at start meanwhile (`PRN_LOG_BASES()`).
+
 **Done when:** in the browser editor, a printer driver (e.g. nelko_pl70e's four sources) builds as model B, installs from the card on a running board with printer_hub loaded, reports `xip:true` without a reboot, and prints; and `pex.list` shows each instance's code and RW base.
 
 ### B4 (Must): paging a Classic device that doesn't answer stalls all Wi-Fi for ~35 s (2026-10-27, bench board, parent dev 719b357)
