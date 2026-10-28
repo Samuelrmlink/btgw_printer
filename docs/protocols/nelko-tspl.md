@@ -1,8 +1,8 @@
 # Nelko PM220: protocol as implemented
 
 Driver: `drivers/vendors/nelko/tspl/` (module `nelko_tspl`, model `pm220`).
-The same driver runs the P21 (`docs/protocols/nelko-p21.md`): one firmware
-family, one model row each in `MODELS[]`.
+The P21 speaks the same commands over BLE and is the `nelko_ble` driver's
+(`docs/protocols/nelko-p21.md`); its reply parsing is this driver's `nelko_proto.c`.
 
 ## Sources
 
@@ -16,7 +16,7 @@ Bluetooth Classic SPP. The printer's USB-C only charges.
 
 | Step | What the driver does | Origin |
 |---|---|---|
-| Find | Inquiry. Claims a device named `PM220` (anywhere in the name, any case) as a PM220, or one whose name starts with `P21` as a P21. A device with no name yet and Class of Device major class 6 (imaging) is held until the inquiry ends, plus 2 s for late names; if it still has no name, it is reported with `"model":null`. A name that matches no model (`PL70e-BT_6CC5`) is never claimed. | `bt_core.c` `looks_like_printer()`, narrowed to the name |
+| Find | Inquiry. Claims a device named `PM220` (anywhere in the name, any case) as a PM220. A P21 is not claimed (it is `nelko_ble`'s, over BLE). A device with no name yet and Class of Device major class 6 (imaging) is held until the inquiry ends, plus 2 s for late names; if it still has no name, it is reported with `"model":null`. A name that matches no model (`PL70e-BT_6CC5`) is never claimed. | `bt_core.c` `looks_like_printer()`, narrowed to the name |
 | Model | The connect config's `model`, else the inquiry name, else `pm220` with a `printer.log` line. A job's `model` overrides it. | |
 | Service | SDP for the Serial Port UUID 0x1101. Falls back to channel 1. A channel that worked before (from the config) skips SDP. | `bt_core.c` |
 | Pairing | Legacy PIN, tried in this order: a PIN that worked before (config `pin`), then `0000`, then `1234`. SSP just-works if the printer asks for SSP. | `bt_core.c` (`0000`, retried with `1234`) |

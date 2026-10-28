@@ -152,7 +152,7 @@ typedef struct {
  * head_dots wide with the origin baked in, and origin is [0,0].
  * web/presets/models.json is the web app's copy of every driver's caps;
  * drivers/test/test_caps.c fails when the two disagree.
- * A driver with several models lists each (nelko_tspl: pm220, p21).
+ * A driver with several models lists each (one entry per MODELS[] row).
  * "speed" is null when the printer takes no speed command. The hub caches
  * id, black_bit and the density/speed ranges of up to four models per driver
  * and clamps job settings to them. Preset ids are media profile ids from the

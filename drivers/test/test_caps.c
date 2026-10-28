@@ -11,6 +11,8 @@ int d30__pex_main(const pex_host_t *, uint32_t, void *);
 int d30__prn_drv(uint32_t, uint32_t, uint32_t, uint32_t);
 int pl70e__pex_main(const pex_host_t *, uint32_t, void *);
 int pl70e__prn_drv(uint32_t, uint32_t, uint32_t, uint32_t);
+int nble__pex_main(const pex_host_t *, uint32_t, void *);
+int nble__prn_drv(uint32_t, uint32_t, uint32_t, uint32_t);
 
 static char R[8192];
 static char *s_web;
@@ -77,6 +79,7 @@ static void t_caps_match_web(void) {
     load_nelko();
     load("phomemo_d30", d30__pex_main, d30__prn_drv);
     load("nelko_pl70e", pl70e__pex_main, pl70e__prn_drv);
+    load("nelko_ble", nble__pex_main, nble__prn_drv);
     fh_run(1200);
     int len = fh_op("printer.drivers", "{}", R, sizeof R);
     CHECK(len > 0);

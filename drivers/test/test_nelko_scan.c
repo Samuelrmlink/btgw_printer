@@ -86,37 +86,36 @@ static void t_names_pick_the_model(void) {
     peer(P21, "P21", 0x000680, 0, 0);
     peer(PM220, "PM220_1A2B", 0x000680, 0, 0);
     peer(QUIET, "nelko pm220", 0x000000, 1, 100);   /* any case, anywhere; CoD doesn't matter */
-    peer(PHONE, "Pixel P21", 0x5a020c, 0, 0);        /* "P21" only at the start of a name */
+    peer(PHONE, "Pixel P21", 0x5a020c, 0, 0);        /* not a model of this driver */
     start();
     CHECK(fh_op("printer.scan", "{\"ms\":2000}", R, sizeof R) > 0);
     CHECK_STR(R, "{\"started\":[\"nelko_tspl\"]}");
     /* named matches are reported while the inquiry runs */
-    CHECK(wait_ev("printer.found", P21, NULL, 1000));
-    CHECK(wait_ev("printer.found", PM220, NULL, 10));
+    CHECK(wait_ev("printer.found", PM220, NULL, 1000));
     CHECK(wait_ev("printer.found", QUIET, NULL, 500));
-    CHECK_HAS(found_ev(P21), "\"model\":\"p21\"");
     CHECK_HAS(found_ev(PM220), "\"model\":\"pm220\"");
     CHECK_HAS(found_ev(QUIET), "\"model\":\"pm220\"");
-    CHECK_HAS(found_ev(P21), "\"driver\":\"nelko_tspl\"");
+    CHECK_HAS(found_ev(PM220), "\"driver\":\"nelko_tspl\"");
     fh_run(8000);
-    /* once each */
-    CHECK_EQ(found(P21), 1);
+    /* once each; the P21 pages over Classic too but is nelko_ble's (BLE) */
+    CHECK_EQ(found(P21), 0);
     CHECK_EQ(found(PM220), 1);
     CHECK_EQ(found(QUIET), 1);
     CHECK_EQ(found(PHONE), 0);
     CHECK(fh_op("printer.devices", "{}", R, sizeof R) > 0);
-    CHECK_HAS(R, "\"addr\":\"" P21 "\",\"name\":\"P21\",\"rssi\":-50,\"model\":\"p21\"");
-    CHECK_HAS(R, "\"addr\":\"" PM220 "\",\"name\":\"PM220_1A2B\",\"rssi\":-50,\"model\":\"pm220\"");
+    CHECK(!strstr(R, P21));
     CHECK(!strstr(R, PHONE));
+    CHECK_HAS(R, "\"addr\":\"" PM220 "\",\"name\":\"PM220_1A2B\",\"rssi\":-50,\"model\":\"pm220\"");
     /* a second scan reports them again, once */
     CHECK(fh_op("printer.scan", "{\"ms\":1000}", R, sizeof R) > 0);
     fh_run(7500);
-    CHECK_EQ(found(P21), 2);
+    CHECK_EQ(found(PM220), 2);
+    CHECK_EQ(found(P21), 0);
 
     /* connect with no model in the config: the inquiry's name picks it */
     int from = fh_events("printer.state");
-    CHECK(fh_op("printer.connect", "{\"driver\":\"nelko_tspl\",\"addr\":\"" P21 "\"}", R, sizeof R) > 0);
-    CHECK(wait_ev_after(from, "printer.state", "\"connected\"", "\"model\":\"p21\"", 3000));
+    CHECK(fh_op("printer.connect", "{\"driver\":\"nelko_tspl\",\"addr\":\"" PM220 "\"}", R, sizeof R) > 0);
+    CHECK(wait_ev_after(from, "printer.state", "\"connected\"", "\"model\":\"pm220\"", 3000));
     CHECK_EQ(fh_events("printer.log"), 0);
 }
 
@@ -172,9 +171,9 @@ static void t_unnamed_to_the_end(void) {
 
     /* the user picks the model in the connect config */
     int from = fh_events("printer.state");
-    CHECK(fh_op("printer.connect", "{\"driver\":\"nelko_tspl\",\"addr\":\"" QUIET "\",\"config\":{\"model\":\"p21\"}}",
+    CHECK(fh_op("printer.connect", "{\"driver\":\"nelko_tspl\",\"addr\":\"" QUIET "\",\"config\":{\"model\":\"pm220\"}}",
                 R, sizeof R) > 0);
-    CHECK(wait_ev_after(from, "printer.state", "\"connected\"", "\"model\":\"p21\"", 3000));
+    CHECK(wait_ev_after(from, "printer.state", "\"connected\"", "\"model\":\"pm220\"", 3000));
     CHECK_EQ(fh_events("printer.log"), 0);
     fh_op("printer.disconnect", "{}", R, sizeof R);
     fh_run(50);

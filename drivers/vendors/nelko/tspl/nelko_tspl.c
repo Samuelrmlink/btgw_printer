@@ -2,7 +2,8 @@
  * printer_hub for every Nelko model of that firmware family (one TSPL subset,
  * the same ESC !? / ESC !o status bytes, BATTERY? and CONFIG?). The models
  * differ in head width, pairing and presets; MODELS[] below has a row each.
- * docs/protocols/nelko-tspl.md (PM220) and nelko-p21.md (P21).
+ * docs/protocols/nelko-tspl.md (PM220). The P21 speaks the same commands
+ * over BLE and is nelko_ble's (vendors/nelko/ble/).
  *
  * Ported from pm220_rp2_webapp's firmware (src/bt/bt_core.c for the link,
  * src/printer/tspl.c for the job) onto the parent's PEX classic group:
@@ -74,7 +75,6 @@ enum {
                          * compares it with == for every command-0 model (PM220, P21, ...) */
     F_AFTER = 16,       /* ESC !? after the job: an error code fails it */
     F_ESC_CRLF = 32,    /* ESC !? is followed by CRLF */
-    F_P21_TEXT = 64,    /* the job text nelko-p21-rs sends: "14.0 mm", DIRECTION 1,1, BITMAP 0,0 */
     F_ASK_MEDIA = 128,  /* ESC !o after connecting, for the roll's size */
 };
 
@@ -96,12 +96,10 @@ static PEX_PTR_TABLE model_t MODELS[] = {
       "\"density\":{\"min\":0,\"max\":15,\"default\":8},\"speed\":null,\"black_bit\":0,\"copies\":true,\"placement\":true,"
       "\"status\":[\"battery\",\"paper\",\"lid\",\"media\"],"
       "\"presets\":[\"nelko-pm220-50x30\",\"nelko-pm220-40x30\",\"nelko-pm220-40x20\",\"nelko-pm220-30x20\",\"nelko-pm220-50x20\",\"nelko-pm220-50x80\"]}" },
-    { "p21", "P21", 96, 1, 15, F_CODES | F_AFTER | F_P21_TEXT | F_ASK_MEDIA, { "0000", "1234" },
-      "{\"id\":\"p21\",\"vendor\":\"Nelko\",\"name\":\"P21\",\"transport\":\"classic\","
-      "\"dpi\":203,\"head_dots\":96,\"min_len_mm\":15,\"max_len_mm\":100,\"media\":[\"gap\",\"continuous\"],"
-      "\"density\":{\"min\":1,\"max\":15,\"default\":8},\"speed\":null,\"black_bit\":0,\"copies\":false,\"placement\":false,"
-      "\"orientation\":\"along_feed\",\"status\":[\"battery\",\"paper\",\"lid\",\"media\"],"
-      "\"presets\":[\"nelko-p21-14x40\",\"nelko-p21-12x40\",\"nelko-p21-14x50\",\"nelko-p21-14x75\",\"nelko-p21-15x30\",\"nelko-p21-14x30\"]}" },
+    /* The P21 is not a row here: it is driven over BLE by nelko_ble
+     * (vendors/nelko/ble/), so a P21 is claimed by one driver only. It pages
+     * over Classic too (same address, docs/protocols/nelko-p21.md), and its
+     * inquiry name would match "P21": no row, no claim. */
 };
 #define NMODELS (int)(sizeof MODELS / sizeof MODELS[0])
 
@@ -581,17 +579,9 @@ static int job_begin(const prn_job_t *j) {
     s_tj.row_bytes = j->row_bytes;
     s_tj.rows = j->rows_total;
     s_tj.copies = (m->flags & F_COPIES) ? j->copies : 1;
-    if (m->flags & F_P21_TEXT) {
-        /* byte for byte what nelko-p21-rs sends (the golden test) */
-        s_tj.mm_tenths = 1;
-        s_tj.direction = 1;
-        s_tj.mirror = 1;
-        if (j->media_type == PRN_MEDIA_GAP && !j->gap_mm100) { s_tj.gap_mm100 = 500; }
-    } else {
-        s_tj.direction = j->rotate == 2 ? 1 : 0;
-        s_tj.x = j->origin_x;
-        s_tj.y = j->origin_y;
-    }
+    s_tj.direction = j->rotate == 2 ? 1 : 0;
+    s_tj.x = j->origin_x;
+    s_tj.y = j->origin_y;
     s_pend_n = s_pend_off = 0;
     if (!pend_add(tspl_head)) { return PEX_EINVAL; }
     s_job = J_PREFLIGHT;

@@ -24,7 +24,7 @@ models through a model table.
 | Vendor | Model | Transport | Driver | Status |
 |---|---|---|---|---|
 | Nelko | PM220 | Bluetooth Classic SPP | `nelko_tspl` | tested in simulation (mcusim) |
-| Nelko | P21 | Bluetooth Classic SPP | `nelko_tspl` | tested in simulation (mcusim) |
+| Nelko | P21 | BLE | `nelko_ble` | tested in simulation (mcusim) |
 | Nelko | PL70e-BT | BLE | `nelko_pl70e` | tested in simulation (mcusim) |
 | Phomemo | D30 | Bluetooth Classic SPP | `phomemo_d30` | tested in simulation (mcusim) |
 

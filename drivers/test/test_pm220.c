@@ -177,11 +177,11 @@ static void t_scan_filters(void) {
     CHECK(fh_op("printer.devices", "{}", R, sizeof R) > 0);
     CHECK_HAS(R, "\"addr\":\"" ADDR "\",\"name\":\"PM220\"");
     CHECK_HAS(R, "\"name\":\"PM220-9F\",\"rssi\":-60,\"model\":\"pm220\"");
-    /* the P21 is the same driver's other model now */
-    CHECK_HAS(R, "\"name\":\"P21-ABCD\",\"rssi\":-60,\"model\":\"p21\"");
+    /* a P21 pages over Classic too, but it is nelko_ble's (BLE): not listed */
+    CHECK(!strstr(R, "P21-ABCD"));
     CHECK(!strstr(R, "Headset"));
     CHECK_EQ(fh_cl_inquiries(), 1);
-    CHECK_EQ(fh_events("printer.found"), 3);
+    CHECK_EQ(fh_events("printer.found"), 2);
     CHECK_HAS(fh_event_last("printer.state"), "\"idle\"");
 }
 

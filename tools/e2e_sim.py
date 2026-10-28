@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """End to end in mcusim: the standalone btgw image, our printer_hub and driver
-PEX modules, and mcusim's simulated printers (PM220, P21, D30 over Classic,
+PEX modules, and mcusim's simulated printers (PM220 and D30 over Classic, P21 and
 PL70e-BT over BLE). For each printer the job is built by the web app's own
 layout and packing code (tools/e2e_job.mjs), uploaded to the board, printed
 with printer.print, and the page the simulator printed is compared dot for
@@ -29,13 +29,25 @@ SKIP = 77
 
 # printer -> (sim spec, driver module, model, media preset, sim pane name prefix, connect config)
 PRINTERS = {
-# (nelko_tspl drives both Nelko TSPL models: the PM220 connect leaves the model
-# to the inquiry name, the P21 one names it as a saved printer does)
+# (the PM220 connect leaves the model to the inquiry name, the P21 one names it
+# as a saved printer does. "ble_peer:" specs are raw BLE peers: the P21 is
+# nelko_ble's, over GATT ff00 at the P21's own server MTU of 23)
     "pm220": ("pm220,pin=1234,addr=C0:55:00:00:01:20", "nelko_tspl", "pm220", "nelko-pm220-50x30", "C0:55:00:00:01:20", {}),
-    "p21": ("p21,addr=C0:55:00:00:01:21", "nelko_tspl", "p21", "nelko-p21-14x40", "C0:55:00:00:01:21", {"model": "p21"}),
+    "p21": ("ble_peer:p21,addr=C0:55:00:00:02:21,name=P21,mtu=23", "nelko_ble", "p21", "nelko-p21-14x40", "C0:55:00:00:02:21",
+            {"model": "p21"}),
     "d30": ("d30,addr=C0:55:00:00:01:22", "phomemo_d30", "d30", "phomemo-d30-12x40", "C0:55:00:00:01:22", {}),
     "pl70e": ("pl70e,addr=C0:55:00:00:02:20", "nelko_pl70e", "pl70e", "nelko-4x6", "C0:55:00:00:02:20", {}),
 }
+
+
+def ble_peer_toml(spec, paper):
+    """"p21,addr=..,mtu=23" as a raw [[device.ble_peer]] table: run_btgw.py's
+    --printer puts a P21 on Classic, and nelko_ble wants it over BLE."""
+    parts = spec.split(",")
+    out = ["[[device.ble_peer]]", 'profile = "%s"' % parts[0], "paper_dir = %s" % json.dumps(paper)]
+    for k, v in (p.split("=", 1) for p in parts[1:]):
+        out.append("%s = %s" % (k, v if v.isdigit() else json.dumps(v)))
+    return "\n".join(out) + "\n"
 
 
 def free_port():
@@ -255,7 +267,14 @@ def main():
            "--src", os.path.join(ROOT, "btgw"), "--sd", "none", "--port", str(port),
            "--paper-dir", paper, "--rtt", "file:" + os.path.join(paper, "console.log"), "-t", "7200s"]
     for n in a.printers:
-        cmd += ["--printer", PRINTERS[n][0]]
+        spec = PRINTERS[n][0]
+        if spec.startswith("ble_peer:"):
+            f = os.path.join(paper, "%s.toml" % n)
+            with open(f, "w") as t:
+                t.write(ble_peer_toml(spec[len("ble_peer:"):], paper))
+            cmd += ["--peer-toml", f]
+        else:
+            cmd += ["--printer", spec]
     simlog = open(os.path.join(paper, "mcusim.log"), "w")
     p = subprocess.Popen(cmd, stdout=simlog, stderr=subprocess.PIPE, text=True)
     ready = threading.Event()

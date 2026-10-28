@@ -23,7 +23,8 @@ browser (web/)  --WS /ws + POST /api/op-->  printer_hub (PEX)  --pex_call-->  dr
 
 | Driver | Protocol, transport | Models | Source |
 |---|---|---|---|
-| `nelko_tspl` | Nelko TSPL, Classic SPP | `pm220`, `p21` | `drivers/vendors/nelko/tspl/` |
+| `nelko_tspl` | Nelko TSPL, Classic SPP | `pm220` | `drivers/vendors/nelko/tspl/` |
+| `nelko_ble` | Nelko TSPL, BLE (GATT `ff00`) | `p21` | `drivers/vendors/nelko/ble/` |
 | `nelko_pl70e` | Nelko TSPL, BLE | `pl70e` | `drivers/vendors/nelko/pl70e/` |
 | `phomemo_d30` | ESC/POS raster, Classic SPP | `d30` | `drivers/vendors/phomemo/d30/` |
 | `printer_virtual` | none (tests) | `virtual` | `drivers/virtual/` |

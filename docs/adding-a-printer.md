@@ -12,14 +12,23 @@ family and transport:
 
 - **Same family, same transport:** add a model row to that driver. Example:
   the P22 is the P21's firmware, so it is one more row in `MODELS[]` in
-  `drivers/vendors/nelko/tspl/nelko_tspl.c` (id, name rule, head dots, density
-  range, flags, PINs, caps object), plus its presets and a `web/presets/models.json` entry.
+  `drivers/vendors/nelko/ble/nelko_ble.c` (id, name prefix, head dots, density
+  range, caps object), plus its presets and a `web/presets/models.json` entry.
+  A Classic one goes in `nelko_tspl.c` the same way (with flags and PINs).
 - **A new protocol or a new transport:** write a new driver (the rest of this
-  page). The PL70e-BT speaks TSPL too, but over BLE, so it has its own driver.
+  page). The P21 speaks the PM220's commands, but over BLE, so it is in
+  `nelko_ble`, not `nelko_tspl`. The PL70e-BT speaks TSPL over BLE too, but with
+  other status replies (`READSTA`) and other GATT pipes, so it has its own driver.
+- **One printer, one driver.** A dual-mode printer (the P21 pages over Classic
+  and advertises over LE, at one address) gets a row in one driver only, or two
+  drivers would claim it. Each module also has to install from the card in one
+  piece of the PEX pool (parent R11): keep it small, and check the size that
+  `tools/run_tests.py pex` prints.
 
 | Driver | Family, transport | Models |
 |---|---|---|
-| `nelko_tspl` | Nelko TSPL, Classic SPP | `pm220`, `p21` |
+| `nelko_tspl` | Nelko TSPL, Classic SPP | `pm220` |
+| `nelko_ble` | Nelko TSPL, BLE (GATT `ff00`, the Jieli firmware) | `p21` |
 | `nelko_pl70e` | Nelko TSPL, BLE | `pl70e` |
 | `phomemo_d30` | Phomemo ESC/POS raster, Classic SPP | `d30` |
 | `printer_virtual` | none (a fake printer for tests) | `virtual` |
@@ -99,7 +108,7 @@ against a fake PEX host (`fakehost/`):
 
 To add one:
 1. Add your module to `drivers/test/modules.mk` (`$(eval $(call module,<short>,<sources>))` and `MODS_OBJ`), and its entry points to `drv.h`.
-2. Write `test_<model>.c` with a simulated printer. `test_pm220.c` is the pattern: the peer parses the job bytes and answers the status queries. A new model row gets its own test too (`test_p21.c` tests the `p21` row of `nelko_tspl`).
+2. Write `test_<model>.c` with a simulated printer. `test_pm220.c` is the pattern: the peer parses the job bytes and answers the status queries. A new model row gets its own test too (`test_p21.c` tests the `p21` row of `nelko_ble` against a simulated BLE peer, `fh_ble.h`).
 3. Run `make -C drivers/test` (or `tools/run_tests.py drivers`).
 4. Check the cross build with `tools/run_tests.py pex` (it builds the `.pex` files and runs `pexlink dump`).
 
