@@ -132,7 +132,8 @@ def bring_up(board, port, pex_dir, mod, install, log):
         log("%-6s %s: installed (model %s, xip_ready %s), loaded: model %s xip %s code_addr 0x%08x rw_addr 0x%08x "
             "code %d rw %d" % ("", mod, inst.get("model"), inst.get("xip_ready"), info.get("model"), info.get("xip"),
                                info.get("code_addr", 0), info.get("rw_addr", 0), info.get("code", 0), info.get("rw", 0)))
-        if not info.get("xip"):
+        # model A installed after boot runs from RAM until the next boot (R11)
+        if not info.get("xip") and info.get("model") == "pic":
             raise RuntimeError("%s installed after boot but not running in place: %s" % (mod, info))
     return info
 
@@ -218,7 +219,8 @@ def run_one(name, board, port, paper, read_png, log, pex_dir, install):
         for mod in (driver, "printer_hub"):
             take_down(board, mod, install)
         if install:
-            log("%-6s pool free/largest: before %s, after both unloaded+uninstalled %s" % (name, base, pool(board)))
+            log("%-6s pool free/largest: before %s, after both unloaded+uninstalled %s" % (
+                name, base if base[0] else "(not up yet)", pool(board)))
 
 
 def main():
