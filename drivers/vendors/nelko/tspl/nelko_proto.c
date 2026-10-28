@@ -167,6 +167,7 @@ const char *nk_status_name(int s) {
     case 0x02: return "feeding";
     case 0x03: return "paper_error";
     case 0x04: return "no_paper";
+    case 0x08: return "no_ribbon";
     case 0x10: return "paused";
     case 0x20: return "busy";
     case 0x24: return "out_of_paper";
@@ -177,4 +178,6 @@ const char *nk_status_name(int s) {
     return "unknown";
 }
 
-int nk_status_error(int s) { return s != 0x00 && s != 0x02 && s != 0x20; }
+/* Not an error: ready, busy (0x20) or feeding (0x02) to wait out, and low
+ * battery (0x30), which the Nelko app prints through. */
+int nk_status_error(int s) { return s != 0x00 && s != 0x02 && s != 0x20 && s != 0x30; }

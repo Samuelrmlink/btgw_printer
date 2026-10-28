@@ -12,10 +12,10 @@ static void put(buf_t *b, const char *s, size_t n) {
     b->p[b->n] = 0;
 }
 static void puts_(buf_t *b, const char *s) { put(b, s, strlen(s)); }
-static void putd(buf_t *b, long v) {
+static void putd(buf_t *b, int32_t v) {
     char t[16];
     int n = 0, neg = v < 0;
-    unsigned long a = neg ? (unsigned long)-v : (unsigned long)v;
+    uint32_t a = neg ? 0u - (uint32_t)v : (uint32_t)v;
     char d[12];
     int k = 0;
     do { d[k++] = (char)('0' + a % 10u); a /= 10u; } while (a);
@@ -27,7 +27,7 @@ static void putmm(buf_t *b, uint32_t mm100, int tenths) {
     if (tenths) {
         uint32_t v = (mm100 + 5u) / 10u;
         char t[2] = { '.', (char)('0' + v % 10u) };
-        putd(b, (long)(v / 10u));
+        putd(b, (int32_t)(v / 10u));
         put(b, t, 2);
         return;
     }
@@ -70,6 +70,9 @@ int tspl_head(char *out, size_t cap, const tspl_job_t *j) {
     puts_(&b, "\r\n");
     if (j->density >= 0) { puts_(&b, "DENSITY "); putd(&b, j->density); puts_(&b, "\r\n"); }
     if (j->speed >= 0) { puts_(&b, "SPEED "); putd(&b, j->speed); puts_(&b, "\r\n"); }
+    if (j->set_gap && j->media != PRN_MEDIA_BLACKMARK) {
+        puts_(&b, j->media == PRN_MEDIA_CONTINUOUS ? "SET GAP OFF\r\n" : "SET GAP ON\r\n");
+    }
     puts_(&b, "CLS\r\n");
     puts_(&b, "BITMAP ");
     putd(&b, j->x);
@@ -78,7 +81,7 @@ int tspl_head(char *out, size_t cap, const tspl_job_t *j) {
     puts_(&b, ",");
     putd(&b, j->row_bytes);
     puts_(&b, ",");
-    putd(&b, (long)j->rows);
+    putd(&b, (int32_t)j->rows);
     puts_(&b, ",1,");
     return b.bad ? -1 : (int)b.n;
 }

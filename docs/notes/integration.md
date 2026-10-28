@@ -81,7 +81,31 @@ Results (2026-10-26, standalone image 835,680 B, parent b397a84, mcusim feature/
 
 A full run takes about 25 minutes of wall time.
 
+`--pex-model pic --install` runs the same with model B modules installed into
+the PEX partition after boot and run in place, plus a reinstall and pool check
+per driver: docs/notes/pex-model-b.md.
+
 ## Open
+
+- **2026-10-28, model B on the bench board** (fw 1.281.0): after one reboot to drop the old
+  model-A reservations (`rw_area` 33,296 → 26,080), printer_hub, nelko_ble, nelko_pl70e and
+  nelko_tspl (`-DPRN_PEX_MODEL=pic`) installed from `sd:/pex-b/` after boot and ran in place
+  (`xip:true`). A nelko_ble update went in **without a reboot**: stop/unload the three, uninstall,
+  install, load; the pool came back to the same 6,160 B free. R11 item 1 still applies: an SD
+  install needs the whole file in one piece of the pool, so with the hub loaded (12,352 B free)
+  the 13.9–17 KB drivers were refused until the hub was unloaded. The default stays `reloc`.
+- **The web app loads a second instance of a loaded driver.** `web/hub.js` `loadAndStart` sends
+  `pex.load` + `pex.start` and expects "already" for a loaded module, but `pex.load` creates
+  `<name>#2` (seen: `nelko_ble#2`, `nelko_pl70e#2`, pool 6,160 → 2,152 B). It should check
+  `pex.list` and only load a module that isn't loaded.
+- **printer_hub's auto-connect reads only `lfs:/printer/printers.json`**; on a board whose flash
+  can't be written (B3) the app saves to `sd:/printer/`, so the hub never sees it. Card files
+  are asynchronous (`pex_fs_open` → pending + callback), so the fix is a small callback-driven
+  read like the hub's job-file path, not a second synchronous open.
+- **The PL70e freezes were a brownout** on a 24 V buck-boost supply, not the protocol: see
+  docs/protocols/nelko-states.md 6.0.
+- **P21: one hub job printed 14 labels**; open, details in docs/protocols/nelko-p21.md
+  "Bench results".
 
 - The simulated PM220 rejects the PIN with HCI 0x05 and the firmware reports why rfcomm. A real PM220 may differ; the driver now copes with both.
 - Parent bugs B1 to B3 and C10: `docs/parent-requirements.md`, section C.
@@ -134,3 +158,10 @@ hub needs a reboot while it would run from RAM (R11 item 3).
 Reboots today, each forced by a firmware bug: one for R11 items 1-2 (driver
 install size, reservations), one for R11 item 3 (hub running from RAM left
 336 B of pool).
+
+**2026-10-27, later (on dev 3a3f531):**
+- **PL70e 4 × 6:** the calibration test page and a label printed from the app. The owner's photo shows the test page well placed (no offset needed), as the 3 × 1 one was. The label itself was poor: new objects keep small-label sizes on a 4 × 6 and stack at the top-left (to fix in the app; see the roadmap).
+- **Paper out:** the roll ran out after two labels, as expected. The driver refused the next job, but the hub said "not connected". Fixed in 3a3f531 (`PRN_DRV_ENOTREADY`, "printer not ready (paper out or lid open?)"). The new nelko_pl70e is on the board; the new hub is not (R11 item 3), so the board still says "refused" for it.
+- **Reboot:** replacing nelko_pl70e needed one. The 9,860 B file didn't fit the pool's largest free piece (9,744 B, even with nelko_tspl unloaded, since it runs from flash) while Anker and the hub were loaded. That is R11 item 1. Uninstalling worked without a reboot (B5 fix confirmed).
+- **Open: the PL70e went silent after the 3 × 1 roll was reloaded** (and after the reboot). BLE connects, but no READSTA reply comes back (paper, lid and printer all stay "unknown"). A 3 × 1 job was sent in full (15,730 B, PRINT included, no writes in flight) and nothing printed; the hub's job stayed "printing" and the app gave up after 60 s ("the printer stopped answering"). Disconnect + connect didn't change it. Not yet known: the printer's own state after the reload (light, button), and what the Nelko app does after a paper load. The decompiled app is being mapped for the printer's states (docs/protocols/nelko-states.md).
+- **Not driver-side yet:** a job the printer never answers stays "printing" in the hub; the driver should give up (time out to failed) when READSTA gets no answer during a job.

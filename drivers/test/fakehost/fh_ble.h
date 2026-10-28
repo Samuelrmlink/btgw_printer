@@ -52,6 +52,7 @@ void fh_ble_peer_stall(fh_ble_peer_t *p, int on);   /* ops stop completing */
 /* lose the next n write-done events, as the gateway's 8-deep module event
  * ring does when it overflows (it drops the oldest, silently) */
 void fh_ble_peer_drop_write_done(fh_ble_peer_t *p, int n);
+void fh_ble_peer_fail_writes(fh_ble_peer_t *p, int n);   /* the next n writes fail; their data never arrives */
 
 typedef struct {
     int connects;

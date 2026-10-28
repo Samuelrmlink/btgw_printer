@@ -15,6 +15,7 @@
 #define MAX_WIDTH 4096
 #define DONE_TIMEOUT_MS 120000u
 #define PROGRESS_MS 250u
+#define BEGIN_WAIT_MS 5000u    /* JOB_BEGIN answering PEX_EAGAIN: ask again for this long */
 
 typedef struct {
     char id[24];
@@ -51,6 +52,7 @@ static struct {
     uint32_t rows_fed;       /* rows taken by the driver in this pass */
     uint32_t sent, total;    /* bytes, over every pass */
     uint32_t t_start, t_progress, t_wait;
+    uint32_t t_begin;        /* first PEX_EAGAIN from JOB_BEGIN, 0: none yet */
     int err;
 } J;
 
@@ -141,8 +143,15 @@ static int autoconnect(void *arg) {
     enum { CFG_MAX = 4096 };
     int fd = pex_fs_open("lfs:/printer/printers.json", PEX_FS_READ, NULL, NULL);
     if (fd < 0) { return PEX_TASK_DONE; }
-    char *s_cfg = pex_malloc(CFG_MAX);
-    if (!s_cfg) { pex_fs_close(fd); return PEX_TASK_DONE; }
+    /* a scratch arena, not pex_malloc: the buffer lives only for this call,
+     * and a long-term block freed again can strand a hole in the pool */
+    pex_arena_t *a = pex_scratch_begin(CFG_MAX);
+    char *s_cfg = a ? pex_scratch_alloc(a, CFG_MAX) : NULL;
+    if (!s_cfg) {
+        if (a) { pex_scratch_end(a); }
+        pex_fs_close(fd);
+        return PEX_TASK_DONE;
+    }
     int n = 0, r;
     while (n < CFG_MAX - 1 && (r = pex_fs_read(fd, s_cfg + n, CFG_MAX - 1 - (size_t)n, NULL, NULL)) > 0) {
         n += r;
@@ -176,7 +185,7 @@ static int autoconnect(void *arg) {
         dcall(d, PRN_DRV_CONNECT, P(addr), P(obj ? obj : "{}"), 0);
         if (obj) { ((char *)obj)[len] = save; }
     }
-    pex_free(s_cfg);
+    pex_scratch_end(a);
     return PEX_TASK_DONE;
 }
 
@@ -205,7 +214,7 @@ static void job_close_file(void) {
 
 static void job_end(int outcome, const char *msg) {
     if (J.st == J_IDLE) { return; }
-    static const char *const names[] = { "done", "failed", "cancelled" };
+    static PEX_PTR_TABLE const char *names[] = { "done", "failed", "cancelled" };
     job_close_file();
     J.st = J_IDLE;
     emit_job(names[outcome < 0 || outcome > 2 ? 1 : outcome], msg);
@@ -298,9 +307,17 @@ static void rewind_pass(void) {
 
 static void begin_feed(void) {
     int rc = dcall(J.d, PRN_DRV_JOB_BEGIN, P(&J.job), 0, 0);
+    if (rc == PEX_EAGAIN) {
+        /* the driver is checking the printer's status first: ask again on
+         * the next ticks (J.st stays J_SCAN) */
+        uint32_t now = pex_ms();
+        if (!J.t_begin) { J.t_begin = now ? now : 1; }
+        else if (now - J.t_begin > BEGIN_WAIT_MS) { job_end(PRN_JOB_FAILED, "the printer didn't answer before the job"); }
+        return;
+    }
     if (rc < 0) {
         job_end(PRN_JOB_FAILED, rc == PEX_EBUSY ? "printer busy" : rc == PEX_ESTATE ? "not connected"
-                : rc == PRN_DRV_ENOTREADY ? "printer not ready (paper out or lid open?)" : "refused");
+                : rc == PRN_DRV_ENOTREADY ? "printer not ready (paper, lid, or not answering: see its status)" : "refused");
         return;
     }
     J.native = rc == 1;
@@ -519,7 +536,7 @@ static int op_status(void *arg, const char *params, char *reply, size_t cap) {
         out_s(&o, "null");
     } else {
         char b[200];
-        static const char *const st[] = { "idle", "checking", "sending", "printing" };
+        static PEX_PTR_TABLE const char *st[] = { "idle", "checking", "sending", "printing" };
         pex_snprintf(b, sizeof b, "{\"job\":%u,\"state\":\"%s\",\"driver\":\"%s\",\"copy\":%u,\"copies\":%u,"
                                   "\"sent\":%u,\"total\":%u}",
                      (unsigned)J.id, st[J.st], J.d ? J.d->name : "", (unsigned)J.job.copy,
@@ -661,7 +678,8 @@ static int op_cancel(void *arg, const char *params, char *reply, size_t cap) {
     return pex_snprintf(reply, cap, "{\"ok\":true}");
 }
 
-static const struct { const char *name; pex_op_fn fn; } OPS[] = {
+/* PEX_PTR_TABLE: tables of pointers live in RW under model B (pex.h) */
+static PEX_PTR_TABLE struct { const char *name; pex_op_fn fn; } OPS[] = {
     { "printer.drivers", op_drivers },     { "printer.scan", op_scan },
     { "printer.devices", op_devices },     { "printer.connect", op_connect },
     { "printer.disconnect", op_disconnect }, { "printer.status", op_status },
@@ -678,6 +696,7 @@ int pex_main(const pex_host_t *host, uint32_t reason, void *arg) {
         }
         return PEX_OK;
     case PEX_APP_RUN:
+        PRN_LOG_BASES();
         memset(&J, 0, sizeof J);
         J.fd = -1;
         s_task = pex_sched_every(5, tick, NULL);

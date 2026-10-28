@@ -394,6 +394,32 @@ without a reboot, in either order.
 - Done: discovery of `apps/<id>/app.json` (or `.gz`) on flash and on the card; its `"label"` is a toolbar button that opens `/sd/apps/<id>/` (the folder is the link; a URL in the file is ignored); `app.addLauncher({id,label,href|onClick})` for code in the page. Seen on the bench board: our `sd:/apps/printer/app.json` gives a "Printer" button to `/sd/apps/printer/`, with nothing of ours on flash.
 - Not part of it (still open, lower priority): `ext` loaded from the app's folder; `pex` start order and autostart from the manifest (R5; on this board `cfg/launch.json` can't be written, B3); an apps window with versions and Remove. We no longer need an extension for the button.
 
+### R14 (Should): model B (`pic`) from the browser compiler, and load addresses in `pex.list` (2026-10-28)
+
+**Why.** Under model A a module installed after boot runs from a RAM copy until the next reboot (R11 item 3): its flash copy holds absolute RW addresses, and the RW area is reserved only at mount (`pex/runtime/pex_xip.c:485,797`; pex-format.md "Code models"). On the bench board that RAM copy doesn't fit, so every driver update costs a reboot. Model B code reaches RW through r9 and code/ro PC-relative, so the flash copy runs in place right after install and takes pool SRAM only while loaded. We are moving our host-built modules to `MODEL pic` (clang, via the SDK's `pex_add_module`; branch `feature/pex-model-b` here). The editor's compiler should be able to do the same, or modules built in the browser keep the reboot problem.
+
+**What pexcc does today** (checked 2026-10-28 against `~/Work/pexcc`, the source of `web/.pex-cc/pexcc.wasm` via `web/pex-cc/make_pexcc.sh`):
+- Emits model A only: a global, a string or a function address is a literal word recorded as an absolute relocation (`src/cc.c` ~4985, `out->abs`), and each import is called through a model-A veneer (`ldr.w ip, [pc, #4]; ldr.w pc, [ip]`). `src/elf_out.c` writes an ELF for `pexlink.py link --model reloc`.
+- Never allocates r9: code uses r0–r7 and r12 (frames are `push {r7, lr}` / `push {r4–r7, lr}`), so r9 is free to be the static base.
+- It does compile our real drivers in model A: nelko_pl70e (4 files) compiles and links, 20,020 B against 11,540 B from gcc (not run on a board).
+
+**Needed** (a `--model pic` switch or equivalent; model A stays the default until the owner decides):
+1. **RW through r9.** A global or static's address is `r9 + offset` (offset known to pexcc, it lays out RW itself), not an absolute word. No `MOVW/MOVT` absolutes.
+2. **Code and ro PC-relative.** A string literal, a `const` object or a function address is formed PC-relative (`adr`/`add rX, pc` + constant), so text+ro needs no patching: pexlink's `RO` reloc list must be empty for a `PIC` file.
+3. **Imports through an r9-relative GOT in RW.** Veneer as in pex-format.md: `ldr r12, =slot(sbrel); add r12, r9; ldr pc, [r12]`; the GOT slots (`.pex.got.<name>`) at the start of RW. Soft-float helpers appended from libgcc must be built ROPI-safe too (or taken from a libgcc built with `-fropi -frwpi`).
+4. **Pointer tables.** A `const` table of pointers can't live in ro: place it in RW and list each word in the `RW` relocs (what `PEX_PTR_TABLE` does for clang). Pointers in initialised RW (`int *p = &x;`, `fn = handler`) likewise go in the `RW` relocs. Our case: `static const pl70e_pipe_t pl70e_pipes[4] = {{"18f0", ...}}`.
+5. **ELF/pexlink.** The output passes `pexlink.py link --target m33 --model pic` with the header `PIC` and `XIP_OK` flags; `R_ARM_SBREL32` (or whatever pexlink resolves) for RW references.
+6. **r9 rule.** Every entry into the module goes through the host trampoline already (pex_main, exports, registered callbacks); pexcc must never clobber r9 and must not take the address of a module function in a way that bypasses the trampoline when the host calls it.
+7. **Tests.** pexcc's own `make test` gains model-B cases (globals, strings, a pointer table, an import, a double helper), run under the Thumb interpreter with r9 set to a RW base that differs from the link base.
+
+**Nice, same area:** `pex.list` reports, per loaded instance, the **code base and RW base addresses** (and `pex.installed` the flash address, not only the partition offset). A debugger or a probe script then maps globals from the module's ELF with one lookup per load, for both models. Today a module has to log `&some_static` itself.
+
+**Found building our modules as model B with clang** (feature/pex-model-b, docs/notes/pex-model-b.md; host build, mcusim only):
+- **The SDK's model B has no C library headers.** `pex_add_module(... MODEL pic)` calls clang with `--target=thumbv*-none-eabi` and no sysroot, so `#include <string.h>` fails; model A gets newlib's headers from gcc. We add `-isystem $(arm-none-eabi-gcc -print-sysroot)/include` in `prn_add_module()`. The SDK could do the same for every `pic` module (it already asks `PEX_GCC` for libgcc), or ship a small `string.h` over the host API's `memcpy`/`strlen`/....
+- **The addresses are already there:** `pex.info` (`mod_json(..., full=true)` in `pex_load.c`) has `code_addr` and `rw_addr`; `pex.list` uses `full=false` and leaves them out. Moving those two fields into the short form is the whole change for the `pex.list` item above. Our modules log both once at start meanwhile (`PRN_LOG_BASES()`).
+
+**Done when:** in the browser editor, a printer driver (e.g. nelko_pl70e's four sources) builds as model B, installs from the card on a running board with printer_hub loaded, reports `xip:true` without a reboot, and prints; and `pex.list` shows each instance's code and RW base.
+
 ### B4 (Must): paging a Classic device that doesn't answer stalls all Wi-Fi for ~35 s (2026-10-27, bench board, parent dev 719b357)
 
 While a `pex_bt_classic_open` (via our `printer.connect`) pages a PM220 that is switched off, the gateway drops off the network. Measured from the PC, one request per second, during one connect attempt:
@@ -432,3 +458,27 @@ Our side: nelko_pl70e treats writes still in flight with no write event for 6 s 
 **Done when:** a module can tell that an event was dropped, and a burst of notifications can't push out a write completion.
 
 **Seen on hardware (2026-10-27):** after the driver guard went in, the next 3x1 job to the PL70e-BT printed and the driver reported `"writes_lost":1`: one write completion never reached the module during a 15.6 KB job.
+
+### R13 (Check): a dual-mode printer over LE, and module size for the P21 driver (2026-10-27)
+
+The P21 driver `nelko_ble` (feature/p21-ble) talks to the printer over LE GATT `ff00`. The P21
+is dual mode: it also pages over Classic, and its LE address is its Classic one
+(merlinschumacher/nelko-p21-print). That author found BlueZ (bleak) would not list it as an
+LE peripheral. Nothing of this is tried on our gateway yet (the P21 arrives 2026-10-28).
+
+To check on the parent (no change asked for yet):
+1. **The LE scan table lists a dual-mode advertiser.** `pex_bt_devices` must return a device
+   whose advertising flags don't say "BR/EDR not supported", and `pex_bt_connect` must make an
+   LE link to it, also when the Classic side knows the same address (inquiry result, bond).
+2. **ATT MTU.** Does the central start an MTU exchange? The P21's server MTU is 23 per that
+   source; the Android app asks 247. `nelko_ble` writes `pex_bt_mtu() - 3` bytes, so whatever
+   the gateway agrees is used.
+3. **Module size (R11 item 1 again).** `nelko_ble.m33.pex` is 14,844 bytes (text 9,672, ro
+   2,412; nelko_tspl went from 15,032 to 14,376 bytes without its P21 row). The largest free
+   pool block on the bench board was about 9.7 KB, so it can't be installed from the card
+   until an SD install streams into the partition (R11 item 1), or after the reboot-and-order
+   workaround we no longer use.
+
+**Done when:** the bench P21 is found by `printer.scan` with `nelko_ble`, connects, and its
+`printer.status` shows an `mtu`; and nelko_ble installs from `sd:/apps/printer/pex/` without a
+reboot.

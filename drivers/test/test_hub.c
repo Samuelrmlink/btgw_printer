@@ -135,6 +135,24 @@ static void t_bad_jobs(void) {
     CHECK(wait_ev("printer.job", "\"failed\"", "not connected", 200));
 }
 
+/* JOB_BEGIN answering PEX_EAGAIN (the driver asking the printer first):
+ * the hub calls again, and gives up after 5 s. */
+static void t_begin_again(void) {
+    setup();
+    connect_virtual();
+    put_bitmap("lfs:/printer/var/job.bin", 104, 100, 0);
+    const char *ok = "{\"driver\":\"printer_virtual\",\"path\":\"printer/var/job.bin\",\"width_dots\":832,"
+                     "\"rows\":100,\"media\":{\"w_mm\":101.6,\"h_mm\":12.5},\"options\":{\"begin_again\":5}}";
+    CHECK(fh_op("printer.print", ok, R, sizeof R) > 0);
+    CHECK(wait_ev("printer.job", "\"done\"", NULL, 5000));
+    const char *never = "{\"driver\":\"printer_virtual\",\"path\":\"printer/var/job.bin\",\"width_dots\":832,"
+                        "\"rows\":100,\"media\":{\"w_mm\":101.6,\"h_mm\":12.5},\"options\":{\"begin_again\":1000000}}";
+    uint32_t t0 = fh_now();
+    CHECK(fh_op("printer.print", never, R, sizeof R) > 0);
+    CHECK(wait_ev("printer.job", "\"failed\"", "didn't answer before the job", 8000));
+    CHECK(fh_now() - t0 >= 5000);
+}
+
 static void t_card_file(void) {
     setup();
     connect_virtual();
@@ -252,6 +270,7 @@ int main(void) {
     RUN(t_print_copies);
     RUN(t_all_black_is_punched);
     RUN(t_bad_jobs);
+    RUN(t_begin_again);
     RUN(t_card_file);
     RUN(t_cancel_and_failure);
     RUN(t_unload_driver_mid_job);

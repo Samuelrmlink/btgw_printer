@@ -23,6 +23,16 @@
 #define POLL_MS 5000
 #define QUERY_TIMEOUT_MS 1500
 #define DONE_TIMEOUT_MS 60000     /* after the last byte: wait this long for READY */
+#define SILENT_MS 30000           /* after the last byte: no READSTA answer at all -> failed */
+#define STUCK_QUERIES 3           /* unanswered READSTAs in a row: the printer has gone quiet */
+/* Before a job the Nelko app asks READSTA and sends only on a fresh
+ * "PAPER" (docs/protocols/nelko-states.md). Ours polls every POLL_MS, so a
+ * ready answer this recent counts; older, or just out of an error, and
+ * JOB_BEGIN answers PEX_EAGAIN after asking again (the hub retries). */
+#define FRESH_MS 8000
+#define BEGIN_ASK_MS 6000        /* JOB_BEGIN asked READSTA this recently: its answer decides */
+#define SETTLE_MS 1500            /* ready again after no paper / lid open: wait this long */
+#define RESYNC_BYTES (104u * 1218u + 64u)   /* recover "resync": more than any BITMAP we send */
 #define SCAN_FOR_CONNECT_MS 5000
 /* The gateway reports every write's outcome within 5 s (its GATT op timeout),
  * but its 8-deep module event ring drops the oldest event when it overflows,
@@ -50,6 +60,13 @@ static volatile uint8_t s_ev_up, s_ev_ready, s_ev_fail, s_ev_down;
 static int s_inflight;
 static uint32_t s_write_ev_at;     /* last PEX_BT_WRITE, or the last write sent */
 static uint32_t s_writes_lost;     /* write events given up on */
+static uint32_t s_writes_failed;   /* writes the gateway reported failed: those bytes never arrived */
+static uint32_t s_unanswered;      /* READSTAs in a row with no answer */
+static uint16_t s_wlen[INFLIGHT_MAX + 1];   /* sizes of the writes in flight, oldest first */
+static uint8_t s_wlen_n;
+static uint32_t s_lost_bytes;      /* bytes of failed writes not yet dealt with */
+static uint8_t s_recover;          /* connect config "recover": what to do once the link is ready */
+enum { REC_NONE = 0, REC_STATUS, REC_RESYNC, REC_RESET };
 static int s_write_err;
 
 /* printer status */
@@ -58,6 +75,9 @@ static int s_status = PL70E_ST_UNKNOWN;
 static uint32_t s_status_at, s_query_at;
 static uint8_t s_query_pending;
 static int s_status_sent = -1;     /* last status emitted */
+static int s_known = PL70E_ST_UNKNOWN;   /* last status the printer actually reported */
+static uint32_t s_ready_since;     /* when it last turned ready after an error */
+static uint32_t s_begin_ask_at;    /* when JOB_BEGIN last asked READSTA itself */
 
 /* job */
 static uint8_t s_job_st;
@@ -122,6 +142,8 @@ static void drop_link(const char *why) {
     if (s_have_addr) { pex_bt_disconnect(s_addr); }
     s_wchr = s_nchr = -1;
     s_inflight = 0;
+    s_wlen_n = 0;
+    s_lost_bytes = 0;
     s_pad_left = 0;
     s_pad_crlf = 0;
     s_tx_head = s_tx_tail = 0;
@@ -148,17 +170,35 @@ static void on_bt(void *arg, const pex_bt_event_t *ev) {
     case PEX_BT_FAILED: s_ev_fail = 1; break;
     case PEX_BT_LINK_DOWN: s_ev_down = 1; break;
     case PEX_BT_WRITE:
+    {
         if (s_inflight > 0) { s_inflight--; }
         s_write_ev_at = pex_ms();
-        if (ev->len >= 2 && ev->data && (ev->data[0] | ev->data[1])) { s_write_err = 1; }
+        uint16_t len = 0;
+        if (s_wlen_n) {
+            len = s_wlen[0];
+            memmove(s_wlen, s_wlen + 1, (size_t)(--s_wlen_n) * sizeof s_wlen[0]);
+        }
+        if (ev->status != 0) {   /* att_error | reason << 8 (e.g. the 5 s op timeout) */
+            /* the gateway says these bytes didn't reach the printer */
+            s_write_err = 1;
+            s_writes_failed++;
+            s_lost_bytes += len;
+        }
         break;
+    }
     case PEX_BT_NOTIFY:
     case PEX_BT_INDICATE: {
         int st = pl70e_rx_feed(&s_rx, ev->data, ev->len);
         if (st >= 0) {
+            if (st == PL70E_ST_READY && s_known != PL70E_ST_READY && s_known != PL70E_ST_UNKNOWN &&
+                s_known != PL70E_ST_PRINTING) {
+                s_ready_since = pex_ms();          /* out of an error: let it settle */
+            }
+            if (st != PL70E_ST_UNKNOWN) { s_known = st; }
             s_status = st;
             s_status_at = pex_ms();
             s_query_pending = 0;
+            s_unanswered = 0;
         }
         break;
     }
@@ -193,10 +233,12 @@ static int pump_one(void) {
     if (rc == PEX_EBUSY) { return 0; }
     if (rc < 0) {
         s_write_err = 1;
+        s_writes_failed++;
         return 0;
     }
     if (!s_inflight) { s_write_ev_at = pex_ms(); }
     s_inflight++;
+    if (s_wlen_n < INFLIGHT_MAX + 1) { s_wlen[s_wlen_n++] = (uint16_t)n; }
     s_tx_tail += n;
     s_sent_total += n;
     return 1;
@@ -205,8 +247,49 @@ static int pump_one(void) {
 static void send_query(void) {
     if (s_job_st == JOB_SEND || s_pad_left || s_pad_crlf || tx_room() < sizeof PL70E_QUERY) { return; }
     tx_put(PL70E_QUERY, sizeof PL70E_QUERY - 1);
+    if (s_query_pending) { s_unanswered++; }
     s_query_pending = 1;
     s_query_at = pex_ms();
+}
+
+/* A write the gateway reports failed lost its bytes. Inside a BITMAP the
+ * printer would still wait for them and read everything after as image
+ * data: it then answers nothing and prints nothing (the bench unit's
+ * "silent" state looks like this). So the job fails, and the lost bytes
+ * plus the rows not yet queued go out as white, then a CRLF: the parser is
+ * back in step, no PRINT runs, and the next job's CLS clears the buffer.
+ * Too much white is harmless (one junk line, ended by the CRLF). */
+static void lost_bytes(void) {
+    uint32_t n = s_lost_bytes;
+    s_lost_bytes = 0;
+    pex_log(PEX_LOG_WARN, "pl70e: %u bytes didn't reach the printer", (unsigned)n);
+    if (s_job_st == JOB_NONE) { return; }   /* a status query: nothing to resync */
+    uint32_t pad = n;
+    if (s_job_st == JOB_SEND && !s_tail_queued) {
+        pad += (s_job.rows_total - s_rows_in) * s_job.row_bytes;
+    }
+    s_pad_left += pad;
+    s_pad_crlf = 1;
+    char m[64];
+    pex_snprintf(m, sizeof m, "%u bytes didn't reach the printer", (unsigned)n);
+    finish_job(PRN_JOB_FAILED, m);
+}
+
+/* Connect config "recover" (bench experiments on a printer that has gone
+ * quiet; none of these is sent by the Nelko app in normal use):
+ *   "status"  ESC !? too, the TSPL immediate status (answered even when paused)
+ *   "resync"  RESYNC_BYTES of white and a CRLF: ends a BITMAP the printer is
+ *             still waiting on, whatever its size
+ *   "reset"   ESC !R, the TSPL soft reset (defined in the app, never sent) */
+static void recover_on_ready(void) {
+    switch (s_recover) {
+    case REC_STATUS: tx_put("\x1b!?\r\n", 5); break;
+    case REC_RESYNC: s_pad_left += RESYNC_BYTES; s_pad_crlf = 1; break;
+    case REC_RESET: tx_put("\x1b!R", 3); break;
+    default: return;
+    }
+    pex_log(PEX_LOG_INFO, "pl70e: recover step %d sent", s_recover);
+    s_recover = REC_NONE;
 }
 
 static int find_pipe(void) {
@@ -255,6 +338,7 @@ static void tick_job(uint32_t now) {
         s_writes_lost += (uint32_t)s_inflight;
         pex_log(PEX_LOG_WARN, "pl70e: %d write event(s) never came; carrying on", s_inflight);
         s_inflight = 0;
+        s_wlen_n = 0;
         s_write_ev_at = now;
     }
     if (s_job_st == JOB_SEND && s_tail_queued && tx_used() == 0 && s_inflight == 0) {
@@ -271,6 +355,10 @@ static void tick_job(uint32_t now) {
         } else if (s_status == PL70E_ST_NOPAPER || s_status == PL70E_ST_LIDOPEN ||
                    s_status == PL70E_ST_OVERHEAT) {
             finish_job(PRN_JOB_FAILED, pl70e_status_name(s_status));
+            emit_status();
+        } else if (s_status_at < s_wait_t0 && now - s_wait_t0 > SILENT_MS) {
+            /* not one READSTA answer since the last byte went out */
+            finish_job(PRN_JOB_FAILED, "the printer isn't answering (job sent; it may not have printed)");
             emit_status();
         } else if (now - s_wait_t0 > DONE_TIMEOUT_MS) {
             /* Sent in full; the printer just never confirmed. */
@@ -320,6 +408,11 @@ static int tick(void *arg) {
             s_backoff_n = 0;
             s_st = ST_READY;
             s_status_at = 0;
+            s_unanswered = 0;           /* the diagnostics count per connection */
+            s_writes_lost = s_writes_failed = 0;
+            s_known = PL70E_ST_UNKNOWN;
+            s_ready_since = 0;
+            recover_on_ready();
             send_query();
             pex_log(PEX_LOG_INFO, "pl70e: %s ready (pipe %s, mtu %d)", s_addr_str,
                     pl70e_pipes[s_pipe].svc, s_mtu);
@@ -331,10 +424,11 @@ static int tick(void *arg) {
     case ST_READY: {
         if (s_ev_down) { drop_link("link lost"); break; }
         if (s_write_err) { s_write_err = 0; pex_log(PEX_LOG_WARN, "pl70e: write failed"); }
+        if (s_lost_bytes) { lost_bytes(); }
         while (pump_one()) {}
         tick_job(now);
         if (s_job_st == JOB_NONE && !s_query_pending && now - s_query_at > POLL_MS) { send_query(); }
-        if (s_query_pending && now - s_query_at > QUERY_TIMEOUT_MS * 3) { s_query_pending = 0; }
+        if (s_query_pending && now - s_query_at > QUERY_TIMEOUT_MS * 3) { s_query_pending = 0; s_unanswered++; }
         if (s_status != s_status_sent && s_status != PL70E_ST_UNKNOWN) {
             s_status_sent = s_status;
             emit_status();
@@ -394,7 +488,17 @@ static int drv_connect(const char *addr, const char *cfg) {
     uint8_t a[6];
     if (!addr || pex_bt_addr(addr, a) < 0) { return PEX_EINVAL; }
     if (s_st != ST_IDLE && s_st != ST_BACKOFF && memcmp(a, s_addr, 6) != 0) { return PEX_EBUSY; }
-    if (s_st == ST_READY && memcmp(a, s_addr, 6) == 0) { return PEX_OK; }
+    if (s_st == ST_READY && memcmp(a, s_addr, 6) == 0) {
+        /* already connected: a "recover" asked for now runs now */
+        char rec[12];
+        if (cfg && pex_json_str(cfg, "recover", rec, sizeof rec)) {
+            s_recover = !strcmp(rec, "status") ? REC_STATUS : !strcmp(rec, "resync") ? REC_RESYNC
+                      : !strcmp(rec, "reset") ? REC_RESET : REC_NONE;
+            if (s_job_st != JOB_NONE) { return PEX_EBUSY; }
+            recover_on_ready();
+        }
+        return PEX_OK;
+    }
     memcpy(s_addr, a, 6);
     pex_bt_addr_str(s_addr, s_addr_str);
     s_have_addr = 1;
@@ -402,6 +506,12 @@ static int drv_connect(const char *addr, const char *cfg) {
     s_auto = (cfg && pex_json_bool(cfg, "auto_reconnect", &v)) ? v : 1;
     v = 0;
     s_wnr = (cfg && pex_json_bool(cfg, "options.write_no_response", &v)) ? v : 0;
+    char rec[12];
+    s_recover = REC_NONE;
+    if (cfg && pex_json_str(cfg, "recover", rec, sizeof rec)) {
+        s_recover = !strcmp(rec, "status") ? REC_STATUS : !strcmp(rec, "resync") ? REC_RESYNC
+                  : !strcmp(rec, "reset") ? REC_RESET : REC_NONE;
+    }
     s_backoff_n = 0;
     start_connect();
     return PEX_EPENDING;
@@ -447,6 +557,18 @@ static int drv_status(const char *addr, char *out, size_t cap) {
         if (k < 0 || (size_t)(n + k) >= cap) { return PEX_ENOMEM; }
         n += k;
     }
+    if (s_writes_failed) {
+        k = pex_snprintf(out + n, cap - (size_t)n, ",\"writes_failed\":%u", (unsigned)s_writes_failed);
+        if (k < 0 || (size_t)(n + k) >= cap) { return PEX_ENOMEM; }
+        n += k;
+    }
+    if (s_st == ST_READY && s_unanswered) {
+        /* how long the printer has said nothing (since connect if never) */
+        k = pex_snprintf(out + n, cap - (size_t)n, ",\"unanswered\":%u,\"quiet_ms\":%u", (unsigned)s_unanswered,
+                         (unsigned)(pex_ms() - (s_status_at ? s_status_at : s_t0)));
+        if (k < 0 || (size_t)(n + k) >= cap) { return PEX_ENOMEM; }
+        n += k;
+    }
     if ((size_t)n + 3 > cap) { return PEX_ENOMEM; }
     out[n++] = '}';
     out[n++] = ']';
@@ -470,6 +592,7 @@ static void make_tspl(tspl_job_t *t, const prn_job_t *j) {
     t->row_bytes = j->row_bytes;
     t->rows = j->rows_total;
     t->copies = j->copies ? j->copies : 1;
+    t->set_gap = 1;                   /* the app's job always says SET GAP ON / OFF */
 }
 
 static int drv_job_begin(const prn_job_t *j) {
@@ -477,7 +600,27 @@ static int drv_job_begin(const prn_job_t *j) {
     if (s_job_st != JOB_NONE || s_pad_left || s_pad_crlf) { return PEX_EBUSY; }
     if (j->row_bytes == 0 || j->row_bytes * 8u > PL70E_HEAD_DOTS || j->rows_total == 0) { return PEX_EINVAL; }
     if (j->black_bit != 0) { return PEX_EINVAL; }
-    if (s_status == PL70E_ST_NOPAPER || s_status == PL70E_ST_LIDOPEN) { return PRN_DRV_ENOTREADY; }
+    uint32_t now = pex_ms();
+    if (s_status == PL70E_ST_NOPAPER || s_status == PL70E_ST_LIDOPEN || s_status == PL70E_ST_OVERHEAT ||
+        s_status == PL70E_ST_PAUSED || s_status == PL70E_ST_ERROR) {
+        /* like the app, ask before refusing: the error may be cleared by
+         * now (paper reloaded). Refuse once the answer to that is an error. */
+        if (s_begin_ask_at && s_status_at >= s_begin_ask_at && now - s_begin_ask_at < BEGIN_ASK_MS) {
+            return PRN_DRV_ENOTREADY;
+        }
+        if (!s_query_pending || now - s_query_at > QUERY_TIMEOUT_MS) { send_query(); s_begin_ask_at = s_query_at; }
+        if (!s_begin_ask_at) { s_begin_ask_at = s_query_at; }
+        return PEX_EAGAIN;
+    }
+    if (s_unanswered >= STUCK_QUERIES) { return PRN_DRV_ENOTREADY; }   /* gone quiet: don't feed it a job */
+    {
+        int fresh = s_status == PL70E_ST_READY && s_status_at && now - s_status_at <= FRESH_MS;
+        if (!fresh || (s_ready_since && now - s_ready_since < SETTLE_MS)) {
+            if (!fresh && (!s_query_pending || now - s_query_at > QUERY_TIMEOUT_MS)) { send_query(); }
+            return PEX_EAGAIN;
+        }
+    }
+    s_begin_ask_at = 0;
     s_job = *j;
     tspl_job_t t;
     make_tspl(&t, j);
@@ -580,6 +723,7 @@ int pex_main(const pex_host_t *host, uint32_t reason, void *arg) {
         return PEX_OK;
     case PEX_APP_RUN: {
         const char *cfg = (const char *)arg;
+        PRN_LOG_BASES();
         s_st = ST_IDLE;
         s_job_st = JOB_NONE;
         s_have_addr = 0;

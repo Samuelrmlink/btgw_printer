@@ -1,5 +1,13 @@
 # PL70e-BT work notes
 
+## Resolved
+
+- **2026-10-28: the silent / frozen printer was a brownout.**
+  - It ran from a 24 V buck-boost module; on the factory adapter it no longer freezes.
+  - Details and symptoms are in docs/protocols/nelko-states.md 6.0.
+  - The quiet-while-printing change (fbdd4a4) was reverted (c1a5340): mid-print READSTA is safe.
+  - Bench tools for one raw 3x1 OEM job with a timed READSTA lived in the session scratchpad (`rawprint.py`). Rebuild from 2.4 if needed.
+
 ## Open
 
 - **2026-10-26: printer silent after the first test job.**

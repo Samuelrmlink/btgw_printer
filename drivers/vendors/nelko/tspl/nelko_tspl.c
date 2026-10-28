@@ -2,7 +2,8 @@
  * printer_hub for every Nelko model of that firmware family (one TSPL subset,
  * the same ESC !? / ESC !o status bytes, BATTERY? and CONFIG?). The models
  * differ in head width, pairing and presets; MODELS[] below has a row each.
- * docs/protocols/nelko-tspl.md (PM220) and nelko-p21.md (P21).
+ * docs/protocols/nelko-tspl.md (PM220). The P21 speaks the same commands
+ * over BLE and is nelko_ble's (vendors/nelko/ble/).
  *
  * Ported from pm220_rp2_webapp's firmware (src/bt/bt_core.c for the link,
  * src/printer/tspl.c for the job) onto the parent's PEX classic group:
@@ -70,10 +71,10 @@ enum {
     F_ANYWHERE = 1,     /* the name rule matches anywhere in the name, else at its start */
     F_PLACEMENT = 2,    /* BITMAP x,y: the bitmap may be narrower than the head */
     F_COPIES = 4,       /* PRINT n; else the hub feeds the rows once per copy */
-    F_CODES = 8,        /* the status byte is a code (nk_status_name), not bits */
+    F_CODES = 8,        /* the status byte is a code (nk_status_name), not bits: the Nelko app
+                         * compares it with == for every command-0 model (PM220, P21, ...) */
     F_AFTER = 16,       /* ESC !? after the job: an error code fails it */
     F_ESC_CRLF = 32,    /* ESC !? is followed by CRLF */
-    F_P21_TEXT = 64,    /* the job text nelko-p21-rs sends: "14.0 mm", DIRECTION 1,1, BITMAP 0,0 */
     F_ASK_MEDIA = 128,  /* ESC !o after connecting, for the roll's size */
 };
 
@@ -87,19 +88,18 @@ typedef struct {
     const char *caps;           /* the model's object in the caps JSON */
 } model_t;
 
-static const model_t MODELS[] = {
-    { "pm220", "PM220", 384, 0, 15, F_ANYWHERE | F_PLACEMENT | F_COPIES | F_ESC_CRLF, { "0000", "1234" },
+/* PEX_PTR_TABLE: tables of pointers live in RW under model B (pex.h) */
+static PEX_PTR_TABLE model_t MODELS[] = {
+    { "pm220", "PM220", 384, 0, 15, F_ANYWHERE | F_PLACEMENT | F_COPIES | F_ESC_CRLF | F_CODES, { "0000", "1234" },
       "{\"id\":\"pm220\",\"vendor\":\"Nelko\",\"name\":\"PM220\",\"transport\":\"classic\","
       "\"dpi\":203,\"head_dots\":384,\"min_len_mm\":10,\"max_len_mm\":200,\"media\":[\"gap\",\"continuous\",\"blackmark\"],"
       "\"density\":{\"min\":0,\"max\":15,\"default\":8},\"speed\":null,\"black_bit\":0,\"copies\":true,\"placement\":true,"
       "\"status\":[\"battery\",\"paper\",\"lid\",\"media\"],"
       "\"presets\":[\"nelko-pm220-50x30\",\"nelko-pm220-40x30\",\"nelko-pm220-40x20\",\"nelko-pm220-30x20\",\"nelko-pm220-50x20\",\"nelko-pm220-50x80\"]}" },
-    { "p21", "P21", 96, 1, 15, F_CODES | F_AFTER | F_P21_TEXT | F_ASK_MEDIA, { "0000", "1234" },
-      "{\"id\":\"p21\",\"vendor\":\"Nelko\",\"name\":\"P21\",\"transport\":\"classic\","
-      "\"dpi\":203,\"head_dots\":96,\"min_len_mm\":15,\"max_len_mm\":100,\"media\":[\"gap\",\"continuous\"],"
-      "\"density\":{\"min\":1,\"max\":15,\"default\":8},\"speed\":null,\"black_bit\":0,\"copies\":false,\"placement\":false,"
-      "\"orientation\":\"along_feed\",\"status\":[\"battery\",\"paper\",\"lid\",\"media\"],"
-      "\"presets\":[\"nelko-p21-14x40\",\"nelko-p21-12x40\",\"nelko-p21-14x50\",\"nelko-p21-14x75\",\"nelko-p21-15x30\",\"nelko-p21-14x30\"]}" },
+    /* The P21 is not a row here: it is driven over BLE by nelko_ble
+     * (vendors/nelko/ble/), so a P21 is claimed by one driver only. It pages
+     * over Classic too (same address, docs/protocols/nelko-p21.md), and its
+     * inquiry name would match "P21": no row, no claim. */
 };
 #define NMODELS (int)(sizeof MODELS / sizeof MODELS[0])
 
@@ -250,7 +250,14 @@ static const char *verdict(int b, int *busy) {
     *busy = 0;
     if (s_model->flags & F_CODES) {
         if (b == 0x20 || b == 0x02) { *busy = 1; return NULL; }
-        return nk_status_error(b) ? nk_status_name(b) : NULL;
+        if (!nk_status_error(b)) { return NULL; }
+        switch (b) {
+        case 0x01: return "lid open";
+        case 0x04: case 0x24: return "out of paper";
+        case 0x10: return "paused";
+        case 0x80: return "overheated";
+        default: return nk_status_name(b);
+        }
     }
     if (b & NK_READY_LID) { return "lid open"; }
     if (b & NK_READY_PAPER) { return "out of paper"; }
@@ -439,9 +446,9 @@ static void on_cl(void *arg, const pex_cl_event_t *ev) {
         break;
     case PEX_CL_FAILED:
     case PEX_CL_CLOSED: {
-        static const char *const why[] = { "", "timeout", "cancelled", "pairing failed", "security",
-                                           "no SPP service", "RFCOMM", "not reachable", "closed",
-                                           "link lost", "bonded" };
+        static PEX_PTR_TABLE const char *why[] = { "", "timeout", "cancelled", "pairing failed", "security",
+                                                   "no SPP service", "RFCOMM", "not reachable", "closed",
+                                                   "link lost", "bonded" };
         const char *w = ev->why >= 0 && ev->why <= 10 ? why[ev->why] : "failed";
         if (s_job) { job_fail(ev->why == 9 ? "link lost" : w); }
         if (ev->kind == PEX_CL_CLOSED && !s_want) {
@@ -480,7 +487,7 @@ static void on_cl(void *arg, const pex_cl_event_t *ev) {
 
 /* ---- queries and replies ---- */
 static void send_query(int kind) {
-    static const char *const q[] = { "", "BATTERY?\r\n", "CONFIG?\r\n", "\x1b!?\r\n", "\x1b!o\r\n" };
+    static PEX_PTR_TABLE const char *q[] = { "", "BATTERY?\r\n", "CONFIG?\r\n", "\x1b!?\r\n", "\x1b!o\r\n" };
     const char *s = q[kind];
     size_t n = strlen(s);
     if (kind == NK_READY && !(s_model->flags & F_ESC_CRLF)) { n = 3; }
@@ -572,17 +579,9 @@ static int job_begin(const prn_job_t *j) {
     s_tj.row_bytes = j->row_bytes;
     s_tj.rows = j->rows_total;
     s_tj.copies = (m->flags & F_COPIES) ? j->copies : 1;
-    if (m->flags & F_P21_TEXT) {
-        /* byte for byte what nelko-p21-rs sends (the golden test) */
-        s_tj.mm_tenths = 1;
-        s_tj.direction = 1;
-        s_tj.mirror = 1;
-        if (j->media_type == PRN_MEDIA_GAP && !j->gap_mm100) { s_tj.gap_mm100 = 500; }
-    } else {
-        s_tj.direction = j->rotate == 2 ? 1 : 0;
-        s_tj.x = j->origin_x;
-        s_tj.y = j->origin_y;
-    }
+    s_tj.direction = j->rotate == 2 ? 1 : 0;
+    s_tj.x = j->origin_x;
+    s_tj.y = j->origin_y;
     s_pend_n = s_pend_off = 0;
     if (!pend_add(tspl_head)) { return PEX_EINVAL; }
     s_job = J_PREFLIGHT;
@@ -951,6 +950,7 @@ int pex_main(const pex_host_t *host, uint32_t reason, void *arg) {
     (void)host; (void)arg;
     switch (reason) {
     case PEX_APP_RUN:
+        PRN_LOG_BASES();
         pex_snprintf(s_self, sizeof s_self, "%s", pex_name(pex_self()));
         s_link = L_IDLE;
         s_job = 0;

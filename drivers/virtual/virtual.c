@@ -7,11 +7,13 @@
  *
  * Job options: {"rate": bytes per 5 ms tick (default 1024),
  *               "fail_at": fail after this many rows, "no_file": true,
- *               "no_paper": true refuses the job as not ready}. */
+ *               "no_paper": true refuses the job as not ready,
+ *               "begin_again": answer PEX_EAGAIN to this many JOB_BEGIN calls first}. */
 #include "pex.h"
 #include "core/prn_core.h"
 
 #include <string.h>
+static uint32_t s_again_job, s_again;   /* "begin_again": calls still to refuse for that job */
 
 #define SELF "printer_virtual"
 #define ADDR "00:00:00:00:5E:01"
@@ -112,8 +114,14 @@ int prn_drv(uint32_t cmd, uint32_t a0, uint32_t a1, uint32_t a2) {
         int nopaper = 0;
         pex_json_bool(j->options, "no_paper", &nopaper);
         if (nopaper) { return PRN_DRV_ENOTREADY; }
+        int64_t again;
+        if (pex_json_int(j->options, "begin_again", &again) && again > 0) {
+            int64_t v = again;
+            if (s_again_job != j->id) { s_again_job = j->id; s_again = (uint32_t)v; }
+            if (s_again) { s_again--; return PEX_EAGAIN; }
+        }
         s_job = *j;
-        int64_t v;
+        int64_t v;   /* job options */
         s_rate = pex_json_int(j->options, "rate", &v) && v > 0 ? (uint32_t)v : 1024u;
         s_fail_at = pex_json_int(j->options, "fail_at", &v) && v > 0 ? (uint32_t)v : 0;
         int nofile = 0;
@@ -178,6 +186,7 @@ int pex_main(const pex_host_t *host, uint32_t reason, void *arg) {
     (void)host; (void)arg;
     switch (reason) {
     case PEX_APP_RUN:
+        PRN_LOG_BASES();
         s_connected = s_connecting = s_in_job = 0;
         s_fd = -1;
         prn_hub_attach(&s_hub, pex_name(pex_self()));

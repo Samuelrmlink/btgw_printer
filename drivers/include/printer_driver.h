@@ -27,6 +27,18 @@
 #define PRN_DRV_SYM "prn_drv"
 #define PRN_ABI 1
 
+/* One log line at APP_RUN with where the loader put this instance: code is
+ * pex_main (image offset 0), rw the start of data+bss+GOT (r9 under model B,
+ * where no address is fixed at link time). A debugger adds an ELF symbol's
+ * offset from its segment start to these to find it. Nothing off target. */
+#if defined(__ARM_EABI__)
+extern char __pex_rw_start[];
+#define PRN_LOG_BASES() pex_log(PEX_LOG_INFO, "%s: code %p rw %p", pex_name(pex_self()), \
+                                (void *)((uintptr_t)pex_main & ~(uintptr_t)1), (void *)__pex_rw_start)
+#else
+#define PRN_LOG_BASES() ((void)0)
+#endif
+
 /* JOB_BEGIN's refusal when the printer is connected but can't print now
  * (out of paper, lid open); its status says which. Outside the PEX_E*
  * range, so the hub can tell it from "not connected" (PEX_ESTATE). */
@@ -76,7 +88,9 @@ enum {
      * job->copies itself from one pass of the rows (TSPL "PRINT n"), 0 if
      * the hub must feed the rows once per copy (job->copy counts), or a
      * negative PEX_E* (PEX_ESTATE: not connected) or PRN_DRV_ENOTREADY to
-     * refuse the job. */
+     * refuse the job. PEX_EAGAIN: not yet (the driver is asking the printer
+     * for a fresh status); the hub calls JOB_BEGIN again on its next ticks,
+     * for up to 5 s, then fails the job. */
     PRN_DRV_JOB_BEGIN = 7,
     /* a0 = const uint8_t *rows, a1 = byte count (always whole rows of
      * job->row_bytes). Returns the bytes taken (whole rows; may be fewer
@@ -138,7 +152,7 @@ typedef struct {
  * head_dots wide with the origin baked in, and origin is [0,0].
  * web/presets/models.json is the web app's copy of every driver's caps;
  * drivers/test/test_caps.c fails when the two disagree.
- * A driver with several models lists each (nelko_tspl: pm220, p21).
+ * A driver with several models lists each (one entry per MODELS[] row).
  * "speed" is null when the printer takes no speed command. The hub caches
  * id, black_bit and the density/speed ranges of up to four models per driver
  * and clamps job settings to them. Preset ids are media profile ids from the

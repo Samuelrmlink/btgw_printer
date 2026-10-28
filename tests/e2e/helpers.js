@@ -79,11 +79,11 @@ export async function fresh(page, { printer = null, connect = true } = {}) {
 }
 
 /** The models web/presets/models.json gives transport "classic". */
-export const CLASSIC = new Set(['pm220', 'p21', 'd30']);
+export const CLASSIC = new Set(['pm220', 'd30']);
 
 export const PL70E = { addr: 'AA:BB:CC:00:01:01', driver: 'nelko_pl70e', model: 'pl70e', nickname: 'Shipping' };
 export const PM220 = { addr: 'AA:BB:CC:00:00:00', driver: 'nelko_tspl', model: 'pm220', nickname: 'Desk' };
-export const P21 = { addr: 'AA:BB:CC:00:02:02', driver: 'nelko_tspl', model: 'p21', nickname: 'Tiny' };
+export const P21 = { addr: 'AA:BB:CC:00:02:02', driver: 'nelko_ble', model: 'p21', nickname: 'Tiny' };
 
 export async function jobs(page) {
   return (await op(page, 'test.jobs')).jobs;

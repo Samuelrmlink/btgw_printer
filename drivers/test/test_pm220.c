@@ -177,11 +177,11 @@ static void t_scan_filters(void) {
     CHECK(fh_op("printer.devices", "{}", R, sizeof R) > 0);
     CHECK_HAS(R, "\"addr\":\"" ADDR "\",\"name\":\"PM220\"");
     CHECK_HAS(R, "\"name\":\"PM220-9F\",\"rssi\":-60,\"model\":\"pm220\"");
-    /* the P21 is the same driver's other model now */
-    CHECK_HAS(R, "\"name\":\"P21-ABCD\",\"rssi\":-60,\"model\":\"p21\"");
+    /* a P21 pages over Classic too, but it is nelko_ble's (BLE): not listed */
+    CHECK(!strstr(R, "P21-ABCD"));
     CHECK(!strstr(R, "Headset"));
     CHECK_EQ(fh_cl_inquiries(), 1);
-    CHECK_EQ(fh_events("printer.found"), 3);
+    CHECK_EQ(fh_events("printer.found"), 2);
     CHECK_HAS(fh_event_last("printer.state"), "\"idle\"");
 }
 
@@ -464,12 +464,26 @@ static void t_preflight_refuses(void) {
     S.ready = 0;
     CHECK(wait_ev_after(from, "printer.job", "\"done\"", NULL, 12000));
     CHECK_EQ(S.jobs, 1);
+    /* the byte is a code, as the Nelko app reads it: low battery (0x30)
+     * still prints and paused (0x10) refuses; read as bits they were
+     * "busy" (waits for ever) and "ready" */
+    S.ready = 0x30;
+    from = fh_events("printer.job");
+    CHECK(print_layout(&cal, "2", 1, &L) > 0);
+    CHECK(wait_ev_after(from, "printer.job", "\"done\"", NULL, 8000));
+    CHECK_EQ(S.jobs, 2);
+    S.ready = 0x10;
+    from = fh_events("printer.job");
+    CHECK(print_layout(&cal, "2", 1, &L) > 0);
+    CHECK(wait_ev_after(from, "printer.job", "\"failed\"", "paused", 3000));
+    CHECK_EQ(S.jobs, 2);
+    S.ready = 0;
     /* a printer that never answers ESC !? still prints after the wait */
     S.mute = 1;
     from = fh_events("printer.job");
     CHECK(print_layout(&cal, "2", 1, &L) > 0);
     CHECK(wait_ev_after(from, "printer.job", "\"done\"", NULL, 5000));
-    CHECK_EQ(S.jobs, 2);
+    CHECK_EQ(S.jobs, 3);
 }
 
 static void t_keepalive(void) {

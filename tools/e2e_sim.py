@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """End to end in mcusim: the standalone btgw image, our printer_hub and driver
-PEX modules, and mcusim's simulated printers (PM220, P21, D30 over Classic,
+PEX modules, and mcusim's simulated printers (PM220 and D30 over Classic, P21 and
 PL70e-BT over BLE). For each printer the job is built by the web app's own
 layout and packing code (tools/e2e_job.mjs), uploaded to the board, printed
 with printer.print, and the page the simulator printed is compared dot for
@@ -9,6 +9,11 @@ dot with the bitmap that was sent.
   tools/e2e_sim.py                       every printer
   tools/e2e_sim.py pm220 pl70e           some
   tools/e2e_sim.py --keep                leave the paper PNGs (prints the dir)
+  tools/e2e_sim.py --pex-model pic --install pl70e
+                                         model B modules (build/drivers-pic),
+                                         installed into the PEX partition after
+                                         boot and run in place (xip), then the
+                                         driver reinstalled with a pool check
 
 Needs: build/standalone (tools/build.py standalone), build/drivers
 (tools/build.py drivers), and mcusim's feature/printer-sims build
@@ -24,13 +29,25 @@ SKIP = 77
 
 # printer -> (sim spec, driver module, model, media preset, sim pane name prefix, connect config)
 PRINTERS = {
-# (nelko_tspl drives both Nelko TSPL models: the PM220 connect leaves the model
-# to the inquiry name, the P21 one names it as a saved printer does)
+# (the PM220 connect leaves the model to the inquiry name, the P21 one names it
+# as a saved printer does. "ble_peer:" specs are raw BLE peers: the P21 is
+# nelko_ble's, over GATT ff00 at the P21's own server MTU of 23)
     "pm220": ("pm220,pin=1234,addr=C0:55:00:00:01:20", "nelko_tspl", "pm220", "nelko-pm220-50x30", "C0:55:00:00:01:20", {}),
-    "p21": ("p21,addr=C0:55:00:00:01:21", "nelko_tspl", "p21", "nelko-p21-14x40", "C0:55:00:00:01:21", {"model": "p21"}),
+    "p21": ("ble_peer:p21,addr=C0:55:00:00:02:21,name=P21,mtu=23", "nelko_ble", "p21", "nelko-p21-14x40", "C0:55:00:00:02:21",
+            {"model": "p21"}),
     "d30": ("d30,addr=C0:55:00:00:01:22", "phomemo_d30", "d30", "phomemo-d30-12x40", "C0:55:00:00:01:22", {}),
     "pl70e": ("pl70e,addr=C0:55:00:00:02:20", "nelko_pl70e", "pl70e", "nelko-4x6", "C0:55:00:00:02:20", {}),
 }
+
+
+def ble_peer_toml(spec, paper):
+    """"p21,addr=..,mtu=23" as a raw [[device.ble_peer]] table: run_btgw.py's
+    --printer puts a P21 on Classic, and nelko_ble wants it over BLE."""
+    parts = spec.split(",")
+    out = ["[[device.ble_peer]]", 'profile = "%s"' % parts[0], "paper_dir = %s" % json.dumps(paper)]
+    for k, v in (p.split("=", 1) for p in parts[1:]):
+        out.append("%s = %s" % (k, v if v.isdigit() else json.dumps(v)))
+    return "\n".join(out) + "\n"
 
 
 def free_port():
@@ -106,14 +123,48 @@ def compare(png, expect, origin, read_png):
     return w, h, bad, first
 
 
-def run_one(name, board, port, paper, read_png, log):
-    spec, driver, model, media, addr, cfg = PRINTERS[name]
-    pex_dir = os.path.join(ROOT, "build", "drivers", "pex")
-    for mod in ("printer_hub", driver):
-        f = os.path.join(pex_dir, mod + ".m33.pex")
-        put(port, "pex/%s.m33.pex" % mod, open(f, "rb").read())
+def pool(board):
+    p = board.call("pex.list")["pool"]
+    return p["free"], p["largest"]
+
+
+def bring_up(board, port, pex_dir, mod, install, log):
+    """Upload one module, load it (from LittleFS, or installed and in place)
+    and start it. Returns its pex.info."""
+    f = os.path.join(pex_dir, mod + ".m33.pex")
+    put(port, "pex/%s.m33.pex" % mod, open(f, "rb").read())
+    if install:
+        inst = board.call("pex.install", {"path": "pex/%s.m33.pex" % mod}, timeout=60)
+        board.call("pex.load", {"name": mod})
+    else:
         board.call("pex.load", {"path": "pex/%s.m33.pex" % mod})
-        board.call("pex.start", {"name": mod})
+    board.call("pex.start", {"name": mod})
+    info = board.call("pex.info", {"name": mod})
+    if install:
+        log("%-6s %s: installed (model %s, xip_ready %s), loaded: model %s xip %s code_addr 0x%08x rw_addr 0x%08x "
+            "code %d rw %d" % ("", mod, inst.get("model"), inst.get("xip_ready"), info.get("model"), info.get("xip"),
+                               info.get("code_addr", 0), info.get("rw_addr", 0), info.get("code", 0), info.get("rw", 0)))
+        # model A installed after boot runs from RAM until the next boot (R11)
+        if not info.get("xip") and info.get("model") == "pic":
+            raise RuntimeError("%s installed after boot but not running in place: %s" % (mod, info))
+    return info
+
+
+def take_down(board, mod, uninstall):
+    for op in ("pex.stop", "pex.unload") + (("pex.uninstall",) if uninstall else ()):
+        try:
+            board.call(op, {"name": mod})
+        except Exception:
+            pass
+
+
+def run_one(name, board, port, paper, read_png, log, pex_dir, install):
+    spec, driver, model, media, addr, cfg = PRINTERS[name]
+    base = pool(board)
+    for mod in ("printer_hub", driver):
+        if mod == driver:
+            with_hub = pool(board)
+        bring_up(board, port, pex_dir, mod, install, log)
     try:
         board.pump(1.5)
         drivers = board.call("printer.drivers")
@@ -150,18 +201,38 @@ def run_one(name, board, port, paper, read_png, log):
         log("%-6s %s %dx%d bitmap at %s -> page %dx%d, %d dots differ%s" % (
             name, os.path.basename(png), job["params"]["width_dots"], job["params"]["rows"],
             job["params"]["origin"], w, h, bad, "" if not bad else " (first %s)" % (first,)))
-        return bad == 0
+        ok = bad == 0
+        try:
+            board.call("printer.disconnect", {"driver": driver})
+        except Exception:
+            pass
+        if install:
+            # the driver out and back in twice, with the hub running: the pool
+            # must come back to the same free / largest each time (no holes)
+            seen = []
+            for _ in range(2):
+                take_down(board, driver, True)
+                board.pump(0.5)
+                seen.append(pool(board))
+                bring_up(board, port, pex_dir, driver, True, log)
+                board.pump(1.5)
+            take_down(board, driver, True)
+            board.pump(0.5)
+            seen.append(pool(board))
+            log("%-6s pool free/largest: hub only %s, after each driver unload+uninstall %s" % (
+                name, with_hub, seen))
+            ok &= all(x == with_hub for x in seen)
+        return ok
     finally:
         try:
             board.call("printer.disconnect", {"driver": driver})
         except Exception:
             pass
         for mod in (driver, "printer_hub"):
-            for op in ("pex.stop", "pex.unload"):
-                try:
-                    board.call(op, {"name": mod})
-                except Exception:
-                    pass
+            take_down(board, mod, install)
+        if install:
+            log("%-6s pool free/largest: before %s, after both unloaded+uninstalled %s" % (
+                name, base if base[0] else "(not up yet)", pool(board)))
 
 
 def main():
@@ -169,7 +240,11 @@ def main():
     ap.add_argument("printers", nargs="*", default=list(PRINTERS))
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--build", default=os.path.join(ROOT, "build", "standalone"))
+    ap.add_argument("--pex-model", choices=("reloc", "pic"), default="reloc")
+    ap.add_argument("--install", action="store_true",
+                    help="pex.install the modules after boot and load them in place, instead of pex.load from LittleFS")
     a = ap.parse_args()
+    pex_dir = os.path.join(ROOT, "build", "drivers" if a.pex_model == "reloc" else "drivers-" + a.pex_model, "pex")
     binary = os.path.join(MCUSIM, "target", "release", "mcusim")
     if not os.path.exists(binary) or not os.path.exists(os.path.join(MCUSIM, "tools", "run_btgw.py")):
         print("e2e_sim: skipped, no mcusim printer-sims build at %s" % MCUSIM)
@@ -177,8 +252,9 @@ def main():
     if not os.path.exists(os.path.join(a.build, "btgw.elf")):
         print("e2e_sim: skipped, no %s/btgw.elf (tools/build.py standalone)" % a.build)
         return SKIP
-    if not glob.glob(os.path.join(ROOT, "build", "drivers", "pex", "*.pex")):
-        rc = subprocess.call([sys.executable, os.path.join(ROOT, "tools", "build.py"), "drivers"])
+    if not glob.glob(os.path.join(pex_dir, "*.pex")):
+        rc = subprocess.call([sys.executable, os.path.join(ROOT, "tools", "build.py"), "drivers",
+                              "--pex-model", a.pex_model])
         if rc:
             return rc
     sys.path.insert(0, os.path.join(MCUSIM, "tools"))
@@ -191,7 +267,14 @@ def main():
            "--src", os.path.join(ROOT, "btgw"), "--sd", "none", "--port", str(port),
            "--paper-dir", paper, "--rtt", "file:" + os.path.join(paper, "console.log"), "-t", "7200s"]
     for n in a.printers:
-        cmd += ["--printer", PRINTERS[n][0]]
+        spec = PRINTERS[n][0]
+        if spec.startswith("ble_peer:"):
+            f = os.path.join(paper, "%s.toml" % n)
+            with open(f, "w") as t:
+                t.write(ble_peer_toml(spec[len("ble_peer:"):], paper))
+            cmd += ["--peer-toml", f]
+        else:
+            cmd += ["--printer", spec]
     simlog = open(os.path.join(paper, "mcusim.log"), "w")
     p = subprocess.Popen(cmd, stdout=simlog, stderr=subprocess.PIPE, text=True)
     ready = threading.Event()
@@ -229,7 +312,7 @@ def main():
             board.pump(0.5)
         for n in a.printers:
             try:
-                ok &= run_one(n, board, port, paper, printer_e2e.read_png_gray, print)
+                ok &= run_one(n, board, port, paper, printer_e2e.read_png_gray, print, pex_dir, a.install)
             except Exception as e:
                 ok = False
                 print("%-6s FAILED: %s" % (n, e))

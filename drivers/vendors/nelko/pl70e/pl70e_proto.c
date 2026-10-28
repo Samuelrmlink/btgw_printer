@@ -1,7 +1,9 @@
 #include "pl70e_proto.h"
 #include <string.h>
 
-const pl70e_pipe_t pl70e_pipes[4] = {
+/* not const: a table of pointers is RW under PEX model B (pex.h PEX_PTR_TABLE;
+ * extern linkage keeps it out of rodata without the attribute) */
+pl70e_pipe_t pl70e_pipes[4] = {
     { "18f0", "2af1", "2af0" },
     { "fff0", "fff2", "fff1" },
     { "49535343-fe7d-4ae5-8fa9-9fafd205e455", "49535343-8841-43f4-a8d4-ecbe34729bb3",
@@ -17,6 +19,8 @@ const char *pl70e_status_name(int st) {
     case PL70E_ST_LIDOPEN: return "lid_open";
     case PL70E_ST_OVERHEAT: return "overheat";
     case PL70E_ST_PRINTING: return "printing";
+    case PL70E_ST_PAUSED: return "paused";
+    case PL70E_ST_ERROR: return "error";
     default: return "unknown";
     }
 }
@@ -35,21 +39,33 @@ int pl70e_status_from_line(const char *line) {
     return PL70E_ST_UNKNOWN;
 }
 
-/* TSPL ESC !? bits as seen on this family (orbsa): 0x04 paper out, 0x01
- * head/lid open, 0x20 printing. */
+/* The ESC !? byte. The Nelko app compares it as a code, not as bits
+ * (docs/protocols/nelko-states.md): 0x30 is low battery and still prints.
+ * A byte not in the table falls back to the TSPL bits seen on this family
+ * (orbsa: 0x04 paper out with 0x02 riding along, 0x01 lid, 0x20 printing). */
 int pl70e_status_from_byte(uint8_t b) {
+    switch (b) {
+    case 0x00: case 0x30: return PL70E_ST_READY;
+    case 0x01: return PL70E_ST_LIDOPEN;
+    case 0x02: case 0x20: return PL70E_ST_PRINTING;
+    case 0x03: case 0x08: case 0x90: return PL70E_ST_ERROR;
+    case 0x04: case 0x24: return PL70E_ST_NOPAPER;
+    case 0x10: return PL70E_ST_PAUSED;
+    case 0x80: return PL70E_ST_OVERHEAT;
+    default: break;
+    }
     if (b & 0x04) { return PL70E_ST_NOPAPER; }
     if (b & 0x01) { return PL70E_ST_LIDOPEN; }
+    if (b & 0x80) { return PL70E_ST_OVERHEAT; }
     if (b & 0x20) { return PL70E_ST_PRINTING; }
-    if (b == 0) { return PL70E_ST_READY; }
     return PL70E_ST_UNKNOWN;
 }
 
 int pl70e_rx_feed(pl70e_rx_t *rx, const uint8_t *data, size_t n) {
     int got = -1;
-    /* The status byte is a small bit set; a text reply is letters, and a
-     * split line can leave a lone CR or LF in a notification. */
-    if (n == 1 && rx->n == 0 && data[0] < 0x41 && data[0] != '\r' && data[0] != '\n') {
+    /* The status byte is a code below 'A' or 0x80/0x90; a text reply is
+     * letters, and a split line can leave a lone CR or LF in a notification. */
+    if (n == 1 && rx->n == 0 && (data[0] < 0x41 || data[0] >= 0x80) && data[0] != '\r' && data[0] != '\n') {
         return pl70e_status_from_byte(data[0]);
     }
     for (size_t i = 0; i < n; i++) {

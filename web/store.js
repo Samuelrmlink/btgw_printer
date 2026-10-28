@@ -51,8 +51,16 @@ export function settingsStore({ read, write, sdUp, served = false }) {
 
 /** nelko_pm220 and nelko_p21 became one driver, nelko_tspl (models pm220, p21). */
 const MERGED = { nelko_pm220: "pm220", nelko_p21: "p21" };
+/** Then the P21 moved to nelko_ble: it is driven over BLE (its LE address is
+ *  its Classic one, so a saved printer keeps its addr). */
+const MOVED = { p21: "nelko_ble" };
 
-export function migrateDriver(driver) {
+/** The driver an old (driver, model) pair belongs to now. */
+export function migrateDriver(driver, model) {
+    const m = model || MERGED[driver];
+    if ((MERGED[driver] || driver === "nelko_tspl") && MOVED[m]) {
+        return MOVED[m];
+    }
     return MERGED[driver] ? "nelko_tspl" : driver;
 }
 
@@ -61,8 +69,11 @@ export function migratePrinters(j) {
     if (!j || !Array.isArray(j.printers)) {
         return { version: 1, printers: [] };
     }
-    return { ...j, printers: j.printers.map((p) =>
-        (MERGED[p.driver] ? { ...p, driver: "nelko_tspl", model: p.model || MERGED[p.driver] } : p)) };
+    return { ...j, printers: j.printers.map((p) => {
+        const model = p.model || MERGED[p.driver];
+        const driver = migrateDriver(p.driver, model);
+        return driver === p.driver ? p : { ...p, driver, model };
+    }) };
 }
 
 // ---- connecting a saved Bluetooth Classic printer ------------------------
