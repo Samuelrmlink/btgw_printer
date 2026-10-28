@@ -66,9 +66,13 @@ static void pr_parse(void) {
                 blk[15] = (uint8_t)c;
                 if (PR.status >= 0) { pr_send(blk, 16); }
             } else if (s[1] == '!' && s[2] == '?') {
-                PR.queries_status++;
-                uint8_t b = (uint8_t)PR.status;
-                if (PR.status >= 0) { pr_send(&b, 1); }
+                /* the bench P21 (fw 4.2.14) answers only when CRLF follows */
+                if (left < 4) { return; }
+                if (s[3] == '\r' || s[3] == '\n') {
+                    PR.queries_status++;
+                    uint8_t b = (uint8_t)PR.status;
+                    if (PR.status >= 0) { pr_send(&b, 1); }
+                }
             }
             PR.parsed += 3;
             continue;
@@ -395,9 +399,9 @@ static void job_golden(uint16_t mtu, size_t max_write) {
     CHECK_EQ(PR.bitmaps, 1);
     CHECK_EQ(PR.prints, 1);
     CHECK_EQ(PR.max_write, max_write);
-    /* first the readiness check, ESC ! ? with no CRLF */
-    CHECK(memcmp(PR.in + start, "\x1b!?\x1b!o", 6) == 0);
-    start += 3;
+    /* first the readiness check, ESC ! ? + CRLF */
+    CHECK(memcmp(PR.in + start, "\x1b!?\r\n\x1b!o", 8) == 0);
+    start += 5;
     /* from the job's first byte to PRINT's CRLF, then the ESC ! ? after it */
     CHECK(PR.n - start >= gn);
     CHECK(memcmp(PR.in + start, s_golden, gn) == 0);

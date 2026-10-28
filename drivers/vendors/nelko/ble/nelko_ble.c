@@ -384,7 +384,7 @@ static int pump_one(uint32_t now) {
 }
 
 static void send_query(int kind) {
-    static PEX_PTR_TABLE const char *q[] = { "", "BATTERY?\r\n", "CONFIG?\r\n", "\x1b!?", "\x1b!o\r\n" };
+    static PEX_PTR_TABLE const char *q[] = { "", "BATTERY?\r\n", "CONFIG?\r\n", "\x1b!?\r\n", "\x1b!o\r\n" };
     const char *s = q[kind];
     uint32_t n = (uint32_t)strlen(s);
     if (s_pad_left || s_pad_crlf || tx_room() < n) { return; }
