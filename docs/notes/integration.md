@@ -87,6 +87,26 @@ per driver: docs/notes/pex-model-b.md.
 
 ## Open
 
+- **2026-10-28, model B on the bench board** (fw 1.281.0): after one reboot to drop the old
+  model-A reservations (`rw_area` 33,296 → 26,080), printer_hub, nelko_ble, nelko_pl70e and
+  nelko_tspl (`-DPRN_PEX_MODEL=pic`) installed from `sd:/pex-b/` after boot and ran in place
+  (`xip:true`). A nelko_ble update went in **without a reboot**: stop/unload the three, uninstall,
+  install, load; the pool came back to the same 6,160 B free. R11 item 1 still applies: an SD
+  install needs the whole file in one piece of the pool, so with the hub loaded (12,352 B free)
+  the 13.9–17 KB drivers were refused until the hub was unloaded. The default stays `reloc`.
+- **The web app loads a second instance of a loaded driver.** `web/hub.js` `loadAndStart` sends
+  `pex.load` + `pex.start` and expects "already" for a loaded module, but `pex.load` creates
+  `<name>#2` (seen: `nelko_ble#2`, `nelko_pl70e#2`, pool 6,160 → 2,152 B). It should check
+  `pex.list` and only load a module that isn't loaded.
+- **printer_hub's auto-connect reads only `lfs:/printer/printers.json`**; on a board whose flash
+  can't be written (B3) the app saves to `sd:/printer/`, so the hub never sees it. Card files
+  are asynchronous (`pex_fs_open` → pending + callback), so the fix is a small callback-driven
+  read like the hub's job-file path, not a second synchronous open.
+- **The PL70e freezes were a brownout** on a 24 V buck-boost supply, not the protocol: see
+  docs/protocols/nelko-states.md 6.0.
+- **P21: one hub job printed 14 labels**; open, details in docs/protocols/nelko-p21.md
+  "Bench results".
+
 - The simulated PM220 rejects the PIN with HCI 0x05 and the firmware reports why rfcomm. A real PM220 may differ; the driver now copes with both.
 - Parent bugs B1 to B3 and C10: `docs/parent-requirements.md`, section C.
 - Hardware: nothing in this branch has run on the bench.

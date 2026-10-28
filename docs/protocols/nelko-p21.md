@@ -55,7 +55,9 @@ the row comes back from git (`nelko_tspl.c` before 8677c42), under its own model
 
 - **Text commands:** ASCII, end with CRLF. The printer acts on `\n`. Replies, where there are
   any, end with CRLF. [M] [J]
-- **Status commands:** raw `ESC` sequences with no terminator. The reply is raw bytes with no CRLF.
+- **Status commands:** raw `ESC` sequences. The reply is raw bytes with no CRLF. **Over BLE the
+  bench P21 (fw 4.2.14) answers `ESC ! ?` only when CRLF follows**; a bare `ESC ! ?` is never
+  answered (2026-10-28, [bench]). nelko_ble sends `ESC ! ?` + CRLF.
   [M] Note: [J] sends `ESC ! o` followed by CRLF and still gets the 16-byte block, so a trailing
   CRLF is tolerated. high
 - **Pacing:** send one query at a time and wait for its answer; pipelining queries is unreliable.
@@ -152,7 +154,39 @@ The printer doesn't require a tag: covered tags still print. The "DRM" is app-si
 
 **BATTERY payload**: BCD percent (`0x99` = 99 %, always 99 while charging), charging flag. [M] [J]
 
+## Bench results (2026-10-28, gateway fw 1.281.0, P21 fw 4.2.14 hw 0.2.2)
+
+Raw GATT writes from the gateway, then through printer_hub + nelko_ble (model B, installed
+after boot, run in place):
+
+- **Found by LE scan** as `P21` at `8C:D0:0D:AB:11:9A`, advertising service `af30` (not `ff00`;
+  `ff00` is in the GATT table). Visible only with no phone holding it. Note: `scan.list` is
+  paged (`offset`, `next`); a tool that reads only the first page misses it in a busy room.
+- **GATT:** `1800`, `ff00` (`ff02` write w/o response, `ff01` notify, `ff04` w/o response,
+  `ff03` notify, `ff05` indicate, `ff10` read/write), `ae3a`, `ae00`. **MTU 255.**
+- **`ff03` sends no credits**, before or during a job: the driver's gap alone paces it.
+- `CONFIG?` → `CONFIG 00 cb 00 02 02 04 02 0e 02 01` (0x00cb = 203 dpi). `ESC ! o` → 16 bytes,
+  CRC ok, 14×40 gap media from the tag. Battery 75 %.
+- **A 3,514 B job** (golden `golden_p21_14x40_d8.bin`) in 244 B writes: 2.2 s, no failed write,
+  one clean label, image centred on the 14 mm tape.
+- **Status while printing:** `0x20` (busy) for about 4 s after the last byte of a 14×40 label,
+  then `00`. `ESC ! ?` + CRLF every 0.7 s during and after the print does **not** reprint; a lone
+  CRLF after the print does not either; `GAP 2.0 mm` on 5 mm media prints one label too.
+- **Open: one job through printer_hub + nelko_ble printed 14 identical labels** (a 15th when the
+  lid was opened), with `PRINT 1` and copies 1 all the way (`bench_print.py`, 96×284, density 8,
+  `GAP 2.0 mm`). The driver saw `0x20` for its whole 30 s wait. Every raw job since, including
+  that gap and that polling, printed once, and mcusim's P21 prints once with the same modules.
+  The difference is still unknown: next, capture the driver's exact bytes (host harness with
+  bench_print's parameters) and diff them against the golden; the pacing (3 writes in flight,
+  10 ms apart, vs one at a time) and the readiness query right before the job are the other
+  differences.
+- nelko_ble disconnects a raw `dev.connect` link to a printer it knows (connect, then
+  `dev.disconnected` at once); stop the module for raw tests.
+
 ## Open questions for the bench (P21 arriving)
+
+Answered above: 1 (yes, `P21`), 2 (255), 3 (no credits). Still open: 4–8.
+
 
 1. Does the gateway's LE scan see the P21 at all (it is dual mode; [M] saw BlueZ hide it), and
    under which name (`P21`, `P21_xxxx`, `P21 Lite`)? Is the LE address the Classic one?
