@@ -47,7 +47,7 @@ test('flash read-only: a saved printer and its calibration land on the card and 
   await expect(page.locator('#cal-offx')).toHaveValue('-1');
 });
 
-test('a printers.json on the card is read first, and old driver names load as nelko_tspl', async ({ page }) => {
+test('a printers.json on the card is read first, and an old P21 driver name loads as nelko_ble', async ({ page }) => {
   await start(page);
   await page.evaluate(async () => {
     const r = await fetch('/api/sd/files/printer/printers.json', { method: 'PUT', body: JSON.stringify({
@@ -58,8 +58,8 @@ test('a printers.json on the card is read first, and old driver names load as ne
   });
   await ready(page);
   await expect(page.locator('#printer-name')).toContainText('Tiny');
-  await page.click('#turn-on-ok');
+  // a BLE printer: connected at load with no "Turn on" prompt
   await expect(page.locator('#status')).toContainText('connected', { timeout: 5000 });
   const st = await op(page, 'printer.status');
-  expect(st.printers.find((p) => p.addr === 'AA:BB:CC:00:02:02')).toMatchObject({ driver: 'nelko_tspl', model: 'p21' });
+  expect(st.printers.find((p) => p.addr === 'AA:BB:CC:00:02:02')).toMatchObject({ driver: 'nelko_ble', model: 'p21' });
 });

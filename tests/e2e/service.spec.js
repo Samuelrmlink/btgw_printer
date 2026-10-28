@@ -6,7 +6,7 @@ import { op, putFile, settle, PL70E, PM220 } from './helpers.js';
 
 const pexOps = async (page) => (await op(page, 'test.pex_ops')).ops;
 const connects = async (page) => (await op(page, 'test.connects')).connects;
-const STOPPED = { printer_hub: null, nelko_tspl: null, nelko_pl70e: null, phomemo_d30: null, printer_virtual: null };
+const STOPPED = { printer_hub: null, nelko_tspl: null, nelko_ble: null, nelko_pl70e: null, phomemo_d30: null, printer_virtual: null };
 
 /** A clean mock with `pex` states and `printers` saved (the first current), then the app. */
 async function boot(page, { pex = {}, printers = [], set = {}, before } = {}) {
@@ -88,7 +88,7 @@ test('a scan for a printer family starts its driver first', async ({ page }) => 
   await boot(page, { pex: { ...STOPPED, printer_hub: 'running' } });
   await page.click('#printer-btn');
   const fam = page.locator('#printers-family');
-  await expect(fam.locator('option')).toContainText(['Nelko PM220 / P21', 'Nelko PL70e-BT']);
+  await expect(fam.locator('option')).toContainText(['Nelko PM220', 'Nelko P21', 'Nelko PL70e-BT']);
   await fam.focus();
   await fam.selectOption({ label: 'Nelko PL70e-BT' });
   await page.keyboard.press('Tab');

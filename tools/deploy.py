@@ -113,7 +113,7 @@ def main():
     ap.add_argument("--target", choices=("flash", "sd"), default="flash", help="where the app's files go")
     ap.add_argument("--sd-dir", default="apps/printer", help="--target sd: the app's folder on the card")
     ap.add_argument("--sd-url", help="--target sd: the URL the board serves it at (default /sd/<sd-dir>/)")
-    ap.add_argument("--pex", default="printer_hub,nelko_tspl,nelko_pl70e,phomemo_d30",
+    ap.add_argument("--pex", default="printer_hub,nelko_tspl,nelko_ble,nelko_pl70e,phomemo_d30",
                     help="--target sd: modules to copy to <sd-dir>/pex/ and list in app.json "
                          "(from build/drivers/pex/; '' for none). printer_hub first: the app starts it; "
                          "it loads a driver only when a printer of that driver is scanned for or connected")

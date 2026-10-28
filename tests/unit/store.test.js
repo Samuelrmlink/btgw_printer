@@ -87,14 +87,23 @@ test("saved printers: nelko_pm220 / nelko_p21 load as nelko_tspl with their mode
         { addr: "B", driver: "nelko_p21", model: "p21" },
         { addr: "C", driver: "nelko_p21" },
         { addr: "D", driver: "nelko_pl70e", model: "pl70e" },
+        { addr: "E", driver: "nelko_tspl", model: "p21", pin: "0000", calibration: { y: 2 } },
+        { addr: "F", driver: "nelko_tspl", model: "pm220" },
     ] });
     assert.equal(j.current, "A");
+    // the P21 is nelko_ble's now (BLE), whichever name it was saved under
     assert.deepEqual(j.printers.map((p) => [p.driver, p.model]),
-        [["nelko_tspl", "pm220"], ["nelko_tspl", "p21"], ["nelko_tspl", "p21"], ["nelko_pl70e", "pl70e"]]);
+        [["nelko_tspl", "pm220"], ["nelko_ble", "p21"], ["nelko_ble", "p21"], ["nelko_pl70e", "pl70e"],
+            ["nelko_ble", "p21"], ["nelko_tspl", "pm220"]]);
     assert.deepEqual(j.printers[0].calibration, { x: 1 });
+    assert.deepEqual(j.printers[4], { addr: "E", driver: "nelko_ble", model: "p21", pin: "0000", calibration: { y: 2 } });
     assert.deepEqual(migratePrinters(null), { version: 1, printers: [] });
     assert.deepEqual(migratePrinters({ printers: "bad" }), { version: 1, printers: [] });
     assert.equal(migrateDriver("nelko_pm220"), "nelko_tspl");
+    assert.equal(migrateDriver("nelko_p21"), "nelko_ble");
+    assert.equal(migrateDriver("nelko_tspl", "p21"), "nelko_ble");
+    assert.equal(migrateDriver("nelko_tspl", "pm220"), "nelko_tspl");
+    assert.equal(migrateDriver("nelko_tspl"), "nelko_tspl");
     assert.equal(migrateDriver("phomemo_d30"), "phomemo_d30");
 });
 

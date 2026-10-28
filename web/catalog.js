@@ -109,7 +109,7 @@ export function findModel(ref) {
     if (typeof ref === "string") {
         return all.find((m) => m.key === ref || m.id === ref) || null;
     }
-    const driver = migrateDriver(ref.driver);
+    const driver = migrateDriver(ref.driver, ref.id);
     return all.find((m) => m.driver === driver && m.id === ref.id) ||
         all.find((m) => m.id === ref.id) || null;
 }
