@@ -152,6 +152,8 @@ printers (fetched once on 2026-10-27). What we've seen [bench]:
 |---|---|
 | solid blue, power-key light off | the silent state: connected, no READSTA answer, jobs ignored (2026-10-27 after a paper reload) |
 | solid blue + flashing red | out of paper (4×6 roll ran out) |
+| solid blue, power-key light on, key dead | brownout freeze at the end-of-label feed on a weak supply (2026-10-28, see 6.0) |
+| quick-flashing blue | advertising, not connected |
 
 ## 3. PM220 and P21 (command 0)
 
@@ -267,6 +269,10 @@ sends `AT+DISCOVERABLE=0\r`; the app treats it as a disconnect.
   haven't called it: it needs the printer's version strings, and whether it
   needs an account token is unknown. A firmware image would show the real
   parser states; that is a decision for the owner.
+- For the OEM-dialect PL70e the app can't even fill in the version check:
+  it reads the version from a `CONFIG?` reply that this unit never sends,
+  and the `Ver4.24EP` string in the app is an unused constant. So an update
+  through the app is probably not offered for it. [inferred]
 
 ## 5. Our drivers against the app
 
@@ -283,6 +289,35 @@ sends `AT+DISCOVERABLE=0\r`; the app treats it as a disconnect.
 | Compression | PM220: QuickLZ mode 3; PL70e OEM: none | none | none (mode 1 prints) |
 
 ## 6. Why the PL70e goes silent, and what to try
+
+### 6.0 Found 2026-10-28: a brownout, not the protocol [bench]
+
+The silent state on our bench was the **power supply**. The printer ran
+from a 24 V buck-boost module (Amazon); its output sagged under the head
+and motor current, and the main MCU froze while the Bluetooth module kept
+the link. On the factory adapter the same job no longer hangs.
+
+- **Where it froze:** always at the end of a label, during the feed to the
+  tear edge. The image printed in full, but the label stopped short, inside
+  the clamp; with the lid closed that looked like a half-printed label.
+- **Symptoms:** solid blue; power-key light on or off; key dead (short and
+  long press); no answer to READSTA on any pipe, even after re-subscribing;
+  link still up. Only the power switch recovers. Nothing sent over
+  Bluetooth (white fill, `ESC ! R`, `ESC ! ?`, other pipes, disconnect)
+  brought it back.
+- **Not the trigger:** bytes sent mid-print. It froze with nothing sent for
+  25 s after a job, and on the factory adapter a READSTA 1 s into a print
+  (the case that had hung 4 of 4 times) is answered and the label feeds
+  out. Out of paper (answers `NOPAPER`) and an image running past the label
+  end (clipped) are handled fine too.
+- **For the drivers:** no quiet period during a print is needed (fbdd4a4
+  added one and was reverted in c1a5340). A user who sees this state should
+  check the supply first; the official app goes unreliable on the same
+  supply. A non-stock 24 V supply needs at least the adapter's rated
+  current, with headroom.
+
+What follows is the earlier analysis. The stuck-in-BITMAP case (lost bytes)
+is still real in principle, and the recovery steps still apply to it.
 
 **Most likely: it is stuck inside a BITMAP.** A TSPL `BITMAP` header fixes
 how many image bytes follow. If any of them never arrive, the printer keeps
