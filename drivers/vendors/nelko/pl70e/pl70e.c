@@ -20,7 +20,6 @@
 #define TICK_MS 20
 #define CONNECT_MS 15000
 #define DISCOVER_MS 8000
-#define POLL_MS 5000
 #define QUERY_TIMEOUT_MS 1500
 #define DONE_TIMEOUT_MS 60000     /* after the last byte: wait this long for READY */
 #define SILENT_MS 30000           /* after the last byte: no READSTA answer at all -> failed */
@@ -34,6 +33,19 @@
 #define SETTLE_MS 1500            /* ready again after no paper / lid open: wait this long */
 #define RESYNC_BYTES (104u * 1218u + 64u)   /* recover "resync": more than any BITMAP we send */
 #define SCAN_FOR_CONNECT_MS 5000
+/* The bench unit (OEM firmware) locks up for good -- no answers, button dead,
+ * only its power switch brings it back -- when ANY byte reaches it while it
+ * prints: a READSTA or a lone CRLF one second after the job, 3 of 3 times;
+ * the same job with nothing sent for 20 s, never (2026-10-28,
+ * docs/protocols/nelko-states.md). So the driver sends nothing at all from
+ * the job's last byte until the print should be over, like the app, which
+ * waits max(1 s, length / k) before its first READSTA (k = 7 mm/s at most
+ * densities). Connect config "print_mm_s" sets k; it never polls while idle
+ * either, and holds off a few seconds after connecting (the printer may be
+ * still finding the gap after power-on). */
+#define PRINT_MM_S 7
+#define HOLD_MARGIN_MS 1500
+#define CONNECT_HOLD_MS 3000
 /* The gateway reports every write's outcome within 5 s (its GATT op timeout),
  * but its 8-deep module event ring drops the oldest event when it overflows,
  * without telling us (parent-requirements B6). Writes still counted in flight
@@ -68,6 +80,9 @@ static uint32_t s_lost_bytes;      /* bytes of failed writes not yet dealt with 
 static uint8_t s_recover;          /* connect config "recover": what to do once the link is ready */
 enum { REC_NONE = 0, REC_STATUS, REC_RESYNC, REC_RESET };
 static int s_write_err;
+static uint32_t s_hold_until;      /* send nothing before this (the printer is busy) */
+static uint8_t s_hold;
+static uint32_t s_mm_s = PRINT_MM_S;
 
 /* printer status */
 static pl70e_rx_t s_rx;
@@ -100,6 +115,25 @@ static void tx_put(const void *p, uint32_t n) {
     const uint8_t *b = p;
     for (uint32_t i = 0; i < n; i++) { s_tx[(s_tx_head + i) % TX_CAP] = b[i]; }
     s_tx_head += n;
+}
+
+static void hold_tx(uint32_t ms) {
+    uint32_t until = pex_ms() + ms;
+    if (!s_hold || (int32_t)(until - s_hold_until) > 0) { s_hold_until = until; }
+    s_hold = 1;
+}
+
+static int holding(void) {
+    if (s_hold && (int32_t)(pex_ms() - s_hold_until) >= 0) { s_hold = 0; }
+    return s_hold;
+}
+
+/* How long the job's labels take to come out, by the app's estimate. */
+static uint32_t print_ms(const prn_job_t *j) {
+    uint32_t mm100 = j->height_mm100 + (j->media_type == PRN_MEDIA_CONTINUOUS ? 0 : j->gap_mm100);
+    uint32_t ms = mm100 * 10u / s_mm_s;
+    if (ms < 1000) { ms = 1000; }
+    return ms * (j->copies ? j->copies : 1) + HOLD_MARGIN_MS;
 }
 
 static void emit_state(const char *state, const char *why) {
@@ -148,6 +182,7 @@ static void drop_link(const char *why) {
     s_pad_crlf = 0;
     s_tx_head = s_tx_tail = 0;
     s_query_pending = 0;
+    s_hold = 0;                       /* the next link holds off on its own (CONNECT_HOLD_MS) */
     s_status = PL70E_ST_UNKNOWN;
     s_status_sent = -1;
     s_ev_up = s_ev_ready = s_ev_fail = s_ev_down = 0;
@@ -221,6 +256,7 @@ static void pad_fill(void) {
 
 static int pump_one(void) {
     pad_fill();
+    if (holding()) { return 0; }
     if (s_wchr < 0 || s_inflight >= INFLIGHT_MAX) { return 0; }
     uint32_t n = tx_used();
     if (!n) { return 0; }
@@ -245,7 +281,7 @@ static int pump_one(void) {
 }
 
 static void send_query(void) {
-    if (s_job_st == JOB_SEND || s_pad_left || s_pad_crlf || tx_room() < sizeof PL70E_QUERY) { return; }
+    if (holding() || s_job_st == JOB_SEND || s_pad_left || s_pad_crlf || tx_room() < sizeof PL70E_QUERY) { return; }
     tx_put(PL70E_QUERY, sizeof PL70E_QUERY - 1);
     if (s_query_pending) { s_unanswered++; }
     s_query_pending = 1;
@@ -342,13 +378,15 @@ static void tick_job(uint32_t now) {
         s_write_ev_at = now;
     }
     if (s_job_st == JOB_SEND && s_tail_queued && tx_used() == 0 && s_inflight == 0) {
+        uint32_t ms = print_ms(&s_job);
         s_job_st = JOB_WAIT;
-        s_wait_t0 = now;
+        s_wait_t0 = now + ms;           /* the first READSTA goes out once it should be done */
         s_status = PL70E_ST_UNKNOWN;
-        send_query();
+        s_query_pending = 0;
+        hold_tx(ms);
         emit_state("printing", NULL);
     }
-    if (s_job_st == JOB_WAIT) {
+    if (s_job_st == JOB_WAIT && !holding()) {
         if (s_status == PL70E_ST_READY && s_status_at >= s_wait_t0) {
             finish_job(PRN_JOB_OK, NULL);
             emit_state("connected", NULL);
@@ -412,8 +450,8 @@ static int tick(void *arg) {
             s_writes_lost = s_writes_failed = 0;
             s_known = PL70E_ST_UNKNOWN;
             s_ready_since = 0;
+            hold_tx(CONNECT_HOLD_MS);
             recover_on_ready();
-            send_query();
             pex_log(PEX_LOG_INFO, "pl70e: %s ready (pipe %s, mtu %d)", s_addr_str,
                     pl70e_pipes[s_pipe].svc, s_mtu);
             emit_state("connected", NULL);
@@ -427,7 +465,7 @@ static int tick(void *arg) {
         if (s_lost_bytes) { lost_bytes(); }
         while (pump_one()) {}
         tick_job(now);
-        if (s_job_st == JOB_NONE && !s_query_pending && now - s_query_at > POLL_MS) { send_query(); }
+        if (s_status_at == 0 && !s_query_pending && s_job_st == JOB_NONE) { send_query(); }   /* first, after the hold */
         if (s_query_pending && now - s_query_at > QUERY_TIMEOUT_MS * 3) { s_query_pending = 0; s_unanswered++; }
         if (s_status != s_status_sent && s_status != PL70E_ST_UNKNOWN) {
             s_status_sent = s_status;
@@ -506,6 +544,8 @@ static int drv_connect(const char *addr, const char *cfg) {
     s_auto = (cfg && pex_json_bool(cfg, "auto_reconnect", &v)) ? v : 1;
     v = 0;
     s_wnr = (cfg && pex_json_bool(cfg, "options.write_no_response", &v)) ? v : 0;
+    int64_t k = PRINT_MM_S;
+    s_mm_s = (cfg && pex_json_int(cfg, "print_mm_s", &k) && k > 0 && k <= 500) ? (uint32_t)k : PRINT_MM_S;
     char rec[12];
     s_recover = REC_NONE;
     if (cfg && pex_json_str(cfg, "recover", rec, sizeof rec)) {
@@ -600,6 +640,7 @@ static int drv_job_begin(const prn_job_t *j) {
     if (s_job_st != JOB_NONE || s_pad_left || s_pad_crlf) { return PEX_EBUSY; }
     if (j->row_bytes == 0 || j->row_bytes * 8u > PL70E_HEAD_DOTS || j->rows_total == 0) { return PEX_EINVAL; }
     if (j->black_bit != 0) { return PEX_EINVAL; }
+    if (holding()) { return PEX_EAGAIN; }     /* just connected, or a cancelled job may still be printing */
     uint32_t now = pex_ms();
     if (s_status == PL70E_ST_NOPAPER || s_status == PL70E_ST_LIDOPEN || s_status == PL70E_ST_OVERHEAT ||
         s_status == PL70E_ST_PAUSED || s_status == PL70E_ST_ERROR) {
@@ -612,11 +653,18 @@ static int drv_job_begin(const prn_job_t *j) {
         if (!s_begin_ask_at) { s_begin_ask_at = s_query_at; }
         return PEX_EAGAIN;
     }
-    if (s_unanswered >= STUCK_QUERIES) { return PRN_DRV_ENOTREADY; }   /* gone quiet: don't feed it a job */
+    if (s_unanswered >= STUCK_QUERIES) {
+        /* gone quiet: don't feed it a job, but keep asking (nothing else polls) */
+        if (!s_query_pending) { send_query(); }
+        return PRN_DRV_ENOTREADY;
+    }
     {
         int fresh = s_status == PL70E_ST_READY && s_status_at && now - s_status_at <= FRESH_MS;
         if (!fresh || (s_ready_since && now - s_ready_since < SETTLE_MS)) {
-            if (!fresh && (!s_query_pending || now - s_query_at > QUERY_TIMEOUT_MS)) { send_query(); }
+            if (!fresh && (!s_query_pending || now - s_query_at > QUERY_TIMEOUT_MS)) {
+                send_query();
+                s_begin_ask_at = s_query_at;   /* an error in its answer refuses the job */
+            }
             return PEX_EAGAIN;
         }
     }
@@ -726,6 +774,7 @@ int pex_main(const pex_host_t *host, uint32_t reason, void *arg) {
         s_st = ST_IDLE;
         s_job_st = JOB_NONE;
         s_have_addr = 0;
+        s_hold = 0;
         s_listen = pex_bt_listen(NULL, on_bt, NULL);
         s_task = pex_sched_every(TICK_MS, tick, NULL);
         prn_hub_attach(&s_hub, DRV_NAME);

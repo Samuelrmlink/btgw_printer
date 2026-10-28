@@ -55,6 +55,8 @@ typedef struct {
     size_t bmp_left;
     uint8_t *bmp;
     size_t bmp_n;
+    uint32_t busy_from, busy_until;   /* printing then (fh_now) */
+    int hung;                /* a byte came while printing: the bench unit locks up */
     int status;              /* reply to READSTA: 0 paper, 1 no paper, 2 lid, 3 unknown word, -1 silent */
     int queries;
     size_t bytes;
@@ -62,6 +64,9 @@ typedef struct {
     int notify_chr;
 } sim_t;
 static sim_t S;
+/* A 4x6 label at density 10 takes about this long on the real thing (well
+ * under the driver's estimate). */
+static uint32_t SIM_PRINT_MS = 3000;
 
 static void sim_reply(const char *s) { fh_ble_peer_notify(S.p, S.notify_chr, s, strlen(s)); }
 
@@ -86,6 +91,8 @@ static void sim_line(const char *l) {
         const char *c = strchr(l, ',');
         S.copies = c ? atoi(c + 1) : atoi(l + 6);
         S.prints++;
+        S.busy_from = fh_now() + 300;          /* the rest of its own line may trail in */
+        S.busy_until = fh_now() + SIM_PRINT_MS * (uint32_t)(S.copies ? S.copies : 1);
     }
 }
 
@@ -126,6 +133,10 @@ static void sim_byte(uint8_t b) {
 static void sim_write(fh_ble_peer_t *p, int chr, const uint8_t *d, size_t n, int wr, void *ctx) {
     (void)p; (void)chr; (void)wr; (void)ctx;
     S.bytes += n;
+    if (S.busy_until && (int32_t)(fh_now() - S.busy_from) >= 0 && (int32_t)(fh_now() - S.busy_until) < 0) {
+        S.hung = 1;
+    }
+    if (S.hung) { return; }
     for (size_t i = 0; i < n; i++) { sim_byte(d[i]); }
 }
 
@@ -162,6 +173,7 @@ static void setup(int pipe_18f0, uint16_t mtu) {
     free(S.page);
     free(S.bmp);
     memset(&S, 0, sizeof S);
+    SIM_PRINT_MS = 3000;
     s_registered = s_done = s_kicks = 0;
     s_done_outcome = -1;
     s_last_state[0] = s_last_status[0] = 0;
@@ -186,10 +198,22 @@ static int drv(uint32_t cmd, uint32_t a0, uint32_t a1, uint32_t a2) {
 static int connected(void *a) { (void)a; return strstr(s_last_state, "\"connected\"") != NULL; }
 static int got_done(void *a) { (void)a; return s_done > 0; }
 
+static int answered(void *a) { (void)a; return S.queries > 0 || S.status < 0; }
+
+/* JOB_BEGIN the way printer_hub calls it: again each tick while the driver
+ * answers PEX_EAGAIN (it is asking the printer first), for up to 5 s. */
+static int begin(const prn_job_t *j) {
+    uint32_t t0 = fh_now();
+    int rc;
+    while ((rc = drv(PRN_DRV_JOB_BEGIN, (uint32_t)j, 0, 0)) == PEX_EAGAIN && fh_now() - t0 < 5000) { fh_run(20); }
+    return rc;
+}
+
 static void connect_printer(void) {
     /* the address must be in the scan table: the driver scans for it */
     CHECK_EQ(drv(PRN_DRV_CONNECT, (uint32_t)ADDR, (uint32_t)"{}", 0), PEX_EPENDING);
     CHECK(fh_run_until(connected, NULL, 20000));
+    CHECK(fh_run_until(answered, NULL, 10000));   /* its first READSTA, after the connect hold */
 }
 
 /* A test page: a 1-dot border, stripes and a diagonal. black = 0. */
@@ -280,14 +304,66 @@ static void t_connect_and_status(void) {
     drv(PRN_DRV_STATUS, 0, (uint32_t)out, sizeof out);
     CHECK_HAS(out, "\"printer\":\"ready\"");
     CHECK_HAS(out, "\"paper\":\"ok\"");
-    /* polls while idle */
+    /* no polling while idle: the printer may be feeding or finding the gap */
     int q = S.queries;
-    fh_run(11000);
-    CHECK(S.queries >= q + 2);
-    /* paper runs out: status event */
-    S.status = 1;
-    fh_run(6000);
-    CHECK_HAS(s_last_status, "\"paper\":\"out\"");
+    fh_run(30000);
+    CHECK_EQ(S.queries, q);
+}
+
+/* Any byte while it prints locks the bench unit up (the sim does the same):
+ * nothing goes out until the estimated print time has passed, then one
+ * READSTA, and the next job only after that. */
+static void t_silent_while_printing(void) {
+    setup(1, 185);
+    connect_printer();
+    fh_run(200);
+    prn_job_t j;
+    fill_job(&j, 76, 203);
+    j.height_mm100 = 2540;                     /* 3x1: (25.4 + 3) mm / 7 mm/s = 4.1 s a copy */
+    j.copies = 1;
+    uint8_t *page = make_page(76, 203);
+    CHECK_EQ(begin(&j), 1);
+    CHECK_EQ(feed_all(page, 76 * 203, 76), 0);
+    CHECK_EQ(drv(PRN_DRV_JOB_END, 0, 0, 0), PEX_OK);
+    uint32_t t0 = 0;
+    while (!S.prints && fh_now() < 60000) { fh_run(10); }
+    t0 = fh_now();
+    size_t b = S.bytes;
+    int q = S.queries;
+    fh_run(4000);
+    CHECK_EQ(S.bytes, b);                      /* silent while it prints */
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), PEX_EBUSY);
+    CHECK(fh_run_until(got_done, NULL, 10000));
+    CHECK_EQ(s_done_outcome, PRN_JOB_OK);
+    CHECK(S.queries == q + 1);
+    CHECK(fh_now() - t0 >= 4000);
+    CHECK(!S.hung);
+    free(page);
+}
+
+/* "print_mm_s" shortens the hold for a printer measured to be faster. */
+static void t_print_speed_config(void) {
+    setup(1, 185);
+    SIM_PRINT_MS = 800;                        /* a fast printer */
+    CHECK_EQ(drv(PRN_DRV_CONNECT, (uint32_t)ADDR, (uint32_t)"{\"print_mm_s\":50}", 0), PEX_EPENDING);
+    CHECK(fh_run_until(connected, NULL, 20000));
+    fh_run(200);
+    prn_job_t j;
+    fill_job(&j, 76, 50);
+    j.height_mm100 = 2540;
+    j.copies = 1;
+    uint8_t *page = make_page(76, 50);
+    int rc;
+    uint32_t g = fh_now();
+    while ((rc = drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0)) != 1 && fh_now() - g < 8000) { fh_run(20); }
+    CHECK_EQ(rc, 1);
+    CHECK_EQ(feed_all(page, 76 * 50, 76), 0);
+    CHECK_EQ(drv(PRN_DRV_JOB_END, 0, 0, 0), PEX_OK);
+    while (!S.prints && fh_now() < 60000) { fh_run(10); }
+    uint32_t t0 = fh_now();
+    CHECK(fh_run_until(got_done, NULL, 10000));
+    CHECK(fh_now() - t0 < 3600);               /* 1 s minimum + 1.5 s margin, not 4.1 s */
+    free(page);
 }
 
 static void print_page(int wb, int h, uint16_t mtu, int pipe_18f0) {
@@ -297,7 +373,7 @@ static void print_page(int wb, int h, uint16_t mtu, int pipe_18f0) {
     prn_job_t j;
     fill_job(&j, wb, h);
     uint8_t *page = make_page(wb, h);
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(begin(&j), 1);
     CHECK_EQ(feed_all(page, (size_t)wb * h, wb), 0);
     CHECK_EQ(drv(PRN_DRV_JOB_END, 0, 0, 0), PEX_OK);
     CHECK(fh_run_until(got_done, NULL, 120000));
@@ -311,6 +387,7 @@ static void print_page(int wb, int h, uint16_t mtu, int pipe_18f0) {
     CHECK_EQ(S.mode, 1);
     CHECK_EQ(S.prints, 1);
     CHECK_EQ(S.copies, 2);
+    CHECK(!S.hung);                            /* nothing reached it while it printed */
     CHECK(S.page && S.page_n == (size_t)wb * h && !memcmp(S.page, page, S.page_n));
     if (getenv("PL70E_PBM") && S.page) {
         FILE *f = fopen(getenv("PL70E_PBM"), "wb");
@@ -345,7 +422,7 @@ static void t_cancel_pads_bitmap(void) {
     prn_job_t j;
     fill_job(&j, 104, 400);
     uint8_t *page = make_page(104, 400);
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(begin(&j), 1);
     CHECK(drv(PRN_DRV_JOB_FEED, (uint32_t)page, 104 * 10, 0) > 0);
     CHECK_EQ(drv(PRN_DRV_CANCEL, 0, 0, 0), PEX_OK);
     CHECK_EQ(s_done_outcome, PRN_JOB_CANCELLED);
@@ -355,13 +432,10 @@ static void t_cancel_pads_bitmap(void) {
     CHECK(S.page && S.page_n == 104u * 400);
     CHECK_EQ(S.prints, 0);
     CHECK(S.page && S.page[104 * 399] == 0xff);
-    int q = S.queries;
-    fh_run(6000);
-    CHECK(S.queries > q);
-    /* and the next job prints */
+    /* and the next job prints (its JOB_BEGIN asks READSTA first: the printer answers) */
     s_done = 0;
     fill_job(&j, 104, 50);
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(begin(&j), 1);
     CHECK_EQ(feed_all(page, 104 * 50, 104), 0);
     CHECK_EQ(drv(PRN_DRV_JOB_END, 0, 0, 0), PEX_OK);
     CHECK(fh_run_until(got_done, NULL, 60000));
@@ -376,7 +450,7 @@ static void t_link_loss_fails_job_and_reconnects(void) {
     prn_job_t j;
     fill_job(&j, 104, 300);
     uint8_t *page = make_page(104, 300);
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(begin(&j), 1);
     drv(PRN_DRV_JOB_FEED, (uint32_t)page, 104 * 20, 0);
     fh_run(50);
     fh_ble_peer_disconnect(S.p);
@@ -396,10 +470,10 @@ static void t_silent_printer_fails_the_job(void) {
     prn_job_t j;
     fill_job(&j, 104, 20);
     uint8_t *page = make_page(104, 20);
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(begin(&j), 1);
     CHECK_EQ(feed_all(page, 104 * 20, 104), 0);
     CHECK_EQ(drv(PRN_DRV_JOB_END, 0, 0, 0), PEX_OK);
-    CHECK(fh_run_until(got_done, NULL, 35000));
+    CHECK(fh_run_until(got_done, NULL, 90000));   /* 2 x 4x6 hold (46 s), then 30 s of silence */
     CHECK_EQ(s_done_outcome, PRN_JOB_FAILED);
     CHECK_HAS(s_done_msg, "isn't answering");
     free(page);
@@ -414,11 +488,11 @@ static void t_busy_printer_times_out_ok(void) {
     prn_job_t j;
     fill_job(&j, 104, 20);
     uint8_t *page = make_page(104, 20);
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(begin(&j), 1);
     CHECK_EQ(feed_all(page, 104 * 20, 104), 0);
     S.status = 3;            /* answers, but with a state that is neither ready nor an error */
     CHECK_EQ(drv(PRN_DRV_JOB_END, 0, 0, 0), PEX_OK);
-    CHECK(fh_run_until(got_done, NULL, 70000));
+    CHECK(fh_run_until(got_done, NULL, 120000));  /* the hold, then DONE_TIMEOUT_MS */
     CHECK_EQ(s_done_outcome, PRN_JOB_OK);
     CHECK_HAS(s_done_msg, "did not confirm");
     free(page);
@@ -431,20 +505,24 @@ static void t_quiet_printer_refuses_a_job(void) {
     connect_printer();
     fh_run(200);
     S.status = -1;
-    fh_run(20000);           /* a few polls go unanswered */
+    fh_run(20000);           /* its last answer is stale */
+    prn_job_t j;
+    fill_job(&j, 104, 10);
+    int rc = begin(&j);      /* asks; no answers */
+    CHECK(rc == PRN_DRV_ENOTREADY || rc == PEX_EAGAIN);
+    CHECK_EQ(begin(&j), PRN_DRV_ENOTREADY);
     char st[512];
     CHECK(drv(PRN_DRV_STATUS, 0, (uint32_t)st, sizeof st) > 0);
     CHECK_HAS(st, "\"unanswered\":");
     CHECK_HAS(st, "\"quiet_ms\":");
-    prn_job_t j;
-    fill_job(&j, 104, 10);
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), PRN_DRV_ENOTREADY);
-    /* it answers again: printable again */
+    /* it answers again: the refusal asked once more, so the next job goes */
     S.status = 0;
-    fh_run(8000);
+    fh_run(5000);            /* the query still pending times out */
+    CHECK_EQ(begin(&j), PRN_DRV_ENOTREADY);
+    fh_run(500);
     CHECK(drv(PRN_DRV_STATUS, 0, (uint32_t)st, sizeof st) > 0);
     CHECK(!strstr(st, "unanswered"));
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(begin(&j), 1);
     CHECK_EQ(drv(PRN_DRV_CANCEL, 0, 0, 0), PEX_OK);
     CHECK(fh_run_until(got_done, NULL, 10000));
     fh_run(2000);
@@ -480,7 +558,7 @@ static void t_failed_write_resyncs_the_printer(void) {
     prn_job_t j;
     fill_job(&j, 76, 203);
     uint8_t *page = make_page(76, 203);
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(begin(&j), 1);
     CHECK(drv(PRN_DRV_JOB_FEED, (uint32_t)page, 76 * 20, 0) > 0);
     fh_ble_peer_fail_writes(S.p, 1);
     int rc = feed_all(page, 76 * 203, 76);
@@ -497,10 +575,10 @@ static void t_failed_write_resyncs_the_printer(void) {
     CHECK_HAS(st, "\"writes_failed\":1");
     /* and the next job prints whole */
     s_done = 0;
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(begin(&j), 1);
     CHECK_EQ(feed_all(page, 76 * 203, 76), 0);
     CHECK_EQ(drv(PRN_DRV_JOB_END, 0, 0, 0), PEX_OK);
-    CHECK(fh_run_until(got_done, NULL, 30000));
+    CHECK(fh_run_until(got_done, NULL, 90000));
     CHECK_EQ(s_done_outcome, PRN_JOB_OK);
     CHECK(S.page && S.page_n == (size_t)76 * 203 && !memcmp(S.page, page, S.page_n));
     CHECK_EQ(S.prints, 1);
@@ -515,14 +593,17 @@ static void t_job_waits_for_a_fresh_ready(void) {
     connect_printer();
     fh_run(200);
     S.status = 1;
-    fh_run(6000);
+    fh_run(9000);                              /* its last "ready" is stale */
     prn_job_t j;
     fill_job(&j, 104, 10);
-    int rc = drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0);
-    CHECK(rc == PRN_DRV_ENOTREADY || rc == PEX_EAGAIN);   /* out of paper (asking again if it's old news) */
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), PEX_EAGAIN);   /* asks first */
+    fh_run(500);
+    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), PRN_DRV_ENOTREADY);   /* out of paper */
     S.status = 0;                              /* paper back in */
-    /* call again like the hub, every tick: it asks, then lets it settle */
-    int again = 0, refused = 0;
+    fh_run(7000);
+    /* call again like the hub, every tick: the "no paper" it knows is old
+     * news, so it asks, then lets the printer settle */
+    int again = 0, refused = 0, rc;
     uint32_t t0 = fh_now(), ready_at = 0;
     while ((rc = drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0)) != 1 && fh_now() - t0 < 10000) {
         again += rc == PEX_EAGAIN;
@@ -549,7 +630,7 @@ static void t_recover_resync(void) {
     prn_job_t j;
     fill_job(&j, 104, 300);
     uint8_t *page = make_page(104, 300);
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(begin(&j), 1);
     CHECK(drv(PRN_DRV_JOB_FEED, (uint32_t)page, 104 * 30, 0) > 0);
     fh_run(1000);
     fh_ble_peer_disconnect(S.p);
@@ -581,11 +662,11 @@ static void t_lost_write_event(void) {
     prn_job_t j;
     fill_job(&j, 76, 203);
     uint8_t *page = make_page(76, 203);
-    CHECK_EQ(drv(PRN_DRV_JOB_BEGIN, (uint32_t)&j, 0, 0), 1);
+    CHECK_EQ(begin(&j), 1);
     fh_ble_peer_drop_write_done(S.p, 1);
     CHECK_EQ(feed_all(page, 76 * 203, 76), 0);
     CHECK_EQ(drv(PRN_DRV_JOB_END, 0, 0, 0), PEX_OK);
-    CHECK(fh_run_until(got_done, NULL, 30000));
+    CHECK(fh_run_until(got_done, NULL, 90000));
     CHECK_EQ(s_done_outcome, PRN_JOB_OK);
     CHECK(fh_log_has("write event(s) never came"));
     CHECK(S.page && S.page_n == (size_t)76 * 203 && !memcmp(S.page, page, S.page_n));
@@ -612,6 +693,7 @@ static void t_print_through_real_hub(void) {
     free(S.page);
     free(S.bmp);
     memset(&S, 0, sizeof S);
+    SIM_PRINT_MS = 3000;
     load_hub();
     add_printer(1, 185);
     s_drv = fh_module("nelko_pl70e", pl70e__pex_main);
@@ -655,6 +737,8 @@ static void t_job_end_with_full_ring(void) {
         free(S.page);
         free(S.bmp);
         memset(&S, 0, sizeof S);
+        SIM_PRINT_MS = 3000;
+    SIM_PRINT_MS = 3000;
         s_op_ms = 60;
         load_hub();
         add_printer(1, 185);
@@ -676,6 +760,7 @@ static void t_job_end_with_full_ring(void) {
                  "\"density\":8,\"speed\":-1,\"copies\":1,\"rotate\":0,\"options\":{}}", wb * 8, h);
         CHECK(fh_op("printer.print", q, R, sizeof R) > 0);
         CHECK(wait_ev("printer.job", "\"done\"", NULL, 120000));
+        CHECK(!S.hung);
         CHECK_EQ(S.prints, 1);
         CHECK(S.page && S.page_n == (size_t)wb * h && !memcmp(S.page, page, S.page_n));
         free(page);
@@ -687,6 +772,8 @@ int main(void) {
     RUN(t_proto);
     RUN(t_info);
     RUN(t_connect_and_status);
+    RUN(t_silent_while_printing);
+    RUN(t_print_speed_config);
     RUN(t_print_small);
     RUN(t_print_full_4x6);
     RUN(t_print_3x1_mtu23);
