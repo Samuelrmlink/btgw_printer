@@ -24,7 +24,7 @@ static inline pex_mod_t *load_virtual(void) {
     fh_start(m, NULL);
     return m;
 }
-/* nelko_tspl: the Nelko TSPL driver (PM220, P21) */
+/* nelko_tspl: the Nelko TSPL driver over Classic (PM220) */
 static inline pex_mod_t *load_nelko(void) {
     pex_mod_t *m = fh_module("nelko_tspl", nelko__pex_main);
     fh_export(m, "prn_drv", (void *)nelko__prn_drv);

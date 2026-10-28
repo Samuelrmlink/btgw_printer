@@ -9,8 +9,8 @@ $(BUILD)/lib/%.o: $(ROOT)/%.c $(GEN)/pex_api.h
 # Modules, each with its own entry point names.
 $(eval $(call module,hub,$(ROOT)/drivers/hub/printer_hub.c))
 $(eval $(call module,virt,$(ROOT)/drivers/virtual/virtual.c))
-# Nelko TSPL (PM220, P21): one driver, tested per model by test_pm220.c,
-# test_p21.c and test_nelko_scan.c
+# Nelko TSPL over Classic (PM220), tested by test_pm220.c and test_nelko_scan.c;
+# its nelko_proto.c also serves nelko_ble (nelko_ble.mk, test_p21.c)
 $(eval $(call module,nelko,$(ROOT)/drivers/vendors/nelko/tspl/nelko_tspl.c $(ROOT)/drivers/vendors/nelko/tspl/nelko_proto.c))
 MODS_OBJ := $(hub_OBJ) $(virt_OBJ) $(nelko_OBJ)
 
@@ -38,3 +38,4 @@ CFLAGS += -MMD -MP
 # test_caps: every driver's caps against web/presets/models.json
 $(BUILD)/test_caps: $(pl70e_OBJ)
 $(BUILD)/test_caps.o: CFLAGS += -DWEB_MODELS='"$(ROOT)/web/presets/models.json"'
+-include nelko_ble.mk
