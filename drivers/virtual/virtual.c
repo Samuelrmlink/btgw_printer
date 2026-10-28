@@ -186,6 +186,7 @@ int pex_main(const pex_host_t *host, uint32_t reason, void *arg) {
     (void)host; (void)arg;
     switch (reason) {
     case PEX_APP_RUN:
+        PRN_LOG_BASES();
         s_connected = s_connecting = s_in_job = 0;
         s_fd = -1;
         prn_hub_attach(&s_hub, pex_name(pex_self()));

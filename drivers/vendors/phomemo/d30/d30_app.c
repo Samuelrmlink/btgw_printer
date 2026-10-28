@@ -52,7 +52,7 @@ static const char CAPS[] =
     "\"status\":[],"
     "\"presets\":[\"phomemo-d30-12x40\",\"phomemo-d30-12x30\",\"phomemo-d30-14x40\",\"phomemo-d30-15x30\",\"phomemo-d30-12x22\"]}]}";
 
-static const spp_drv_t DRV = {
+static PEX_PTR_TABLE spp_drv_t DRV = {
     .driver = "phomemo_d30",
     .model = "d30",
     .name_prefix = "D30",

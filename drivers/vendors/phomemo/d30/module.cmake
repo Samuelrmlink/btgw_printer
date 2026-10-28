@@ -2,7 +2,6 @@
 prn_add_module(phomemo_d30
     SOURCES ${CMAKE_CURRENT_LIST_DIR}/d30_app.c ${CMAKE_CURRENT_LIST_DIR}/d30_proto.c
     TARGETS m33
-    MODEL reloc
     KIND app
     VERSION 0.1.0
     DESCRIPTION "Phomemo D30 label printer"

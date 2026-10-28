@@ -13,7 +13,7 @@
 
 /* The four GATT pipes reach the same TSPL parser; tried in this order. */
 typedef struct { const char *svc, *write, *notify; } pl70e_pipe_t;
-extern const pl70e_pipe_t pl70e_pipes[4];
+extern pl70e_pipe_t pl70e_pipes[4];
 
 enum {
     PL70E_ST_UNKNOWN = 0,

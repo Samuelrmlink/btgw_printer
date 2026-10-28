@@ -88,7 +88,8 @@ typedef struct {
     const char *caps;           /* the model's object in the caps JSON */
 } model_t;
 
-static const model_t MODELS[] = {
+/* PEX_PTR_TABLE: tables of pointers live in RW under model B (pex.h) */
+static PEX_PTR_TABLE model_t MODELS[] = {
     { "pm220", "PM220", 384, 0, 15, F_ANYWHERE | F_PLACEMENT | F_COPIES | F_ESC_CRLF | F_CODES, { "0000", "1234" },
       "{\"id\":\"pm220\",\"vendor\":\"Nelko\",\"name\":\"PM220\",\"transport\":\"classic\","
       "\"dpi\":203,\"head_dots\":384,\"min_len_mm\":10,\"max_len_mm\":200,\"media\":[\"gap\",\"continuous\",\"blackmark\"],"
@@ -447,9 +448,9 @@ static void on_cl(void *arg, const pex_cl_event_t *ev) {
         break;
     case PEX_CL_FAILED:
     case PEX_CL_CLOSED: {
-        static const char *const why[] = { "", "timeout", "cancelled", "pairing failed", "security",
-                                           "no SPP service", "RFCOMM", "not reachable", "closed",
-                                           "link lost", "bonded" };
+        static PEX_PTR_TABLE const char *why[] = { "", "timeout", "cancelled", "pairing failed", "security",
+                                                   "no SPP service", "RFCOMM", "not reachable", "closed",
+                                                   "link lost", "bonded" };
         const char *w = ev->why >= 0 && ev->why <= 10 ? why[ev->why] : "failed";
         if (s_job) { job_fail(ev->why == 9 ? "link lost" : w); }
         if (ev->kind == PEX_CL_CLOSED && !s_want) {
@@ -488,7 +489,7 @@ static void on_cl(void *arg, const pex_cl_event_t *ev) {
 
 /* ---- queries and replies ---- */
 static void send_query(int kind) {
-    static const char *const q[] = { "", "BATTERY?\r\n", "CONFIG?\r\n", "\x1b!?\r\n", "\x1b!o\r\n" };
+    static PEX_PTR_TABLE const char *q[] = { "", "BATTERY?\r\n", "CONFIG?\r\n", "\x1b!?\r\n", "\x1b!o\r\n" };
     const char *s = q[kind];
     size_t n = strlen(s);
     if (kind == NK_READY && !(s_model->flags & F_ESC_CRLF)) { n = 3; }
@@ -959,6 +960,7 @@ int pex_main(const pex_host_t *host, uint32_t reason, void *arg) {
     (void)host; (void)arg;
     switch (reason) {
     case PEX_APP_RUN:
+        PRN_LOG_BASES();
         pex_snprintf(s_self, sizeof s_self, "%s", pex_name(pex_self()));
         s_link = L_IDLE;
         s_job = 0;

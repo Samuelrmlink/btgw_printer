@@ -723,6 +723,7 @@ int pex_main(const pex_host_t *host, uint32_t reason, void *arg) {
         return PEX_OK;
     case PEX_APP_RUN: {
         const char *cfg = (const char *)arg;
+        PRN_LOG_BASES();
         s_st = ST_IDLE;
         s_job_st = JOB_NONE;
         s_have_addr = 0;

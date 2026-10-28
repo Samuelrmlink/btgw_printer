@@ -19,8 +19,27 @@ endif()
 # is the same ELF linked with --no-debug. -DPRN_PEX_DEBUG=ON keeps debug info
 # in the main copy instead.
 option(PRN_PEX_DEBUG "keep the DEBUG section in the .pex files" OFF)
+# The code model of every module (btgw/docs/pex-format.md section 6): reloc
+# (model A, gcc, relocated at install) or pic (model B, clang ROPI+RWPI, RW
+# through r9). Model B runs in place as soon as it is installed; model A
+# installed after boot runs from RAM until the next boot. A module.cmake may
+# still pin one with MODEL. docs/notes/pex-model-b.md
+set(PRN_PEX_MODEL reloc CACHE STRING "PEX code model for the printer modules: reloc or pic")
+set_property(CACHE PRN_PEX_MODEL PROPERTY STRINGS reloc pic)
+# clang has no C library headers for arm-none-eabi, and our sources include
+# <string.h> (memcpy and friends come from the host API either way): under
+# model B take newlib's headers from the gcc toolchain, as model A does.
+execute_process(COMMAND ${PEX_GCC} -print-sysroot OUTPUT_VARIABLE _prn_sysroot
+    OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc)
+if(NOT _rc EQUAL 0 OR NOT EXISTS "${_prn_sysroot}/include/string.h")
+    message(FATAL_ERROR "prn: no newlib headers via ${PEX_GCC} -print-sysroot")
+endif()
+set(PRN_PIC_CFLAGS -isystem ${_prn_sysroot}/include)
 function(prn_add_module name)
     cmake_parse_arguments(M "LUA" "MODEL;KIND;VERSION;DESCRIPTION;FLAGS;OUTPUT_DIR" "SOURCES;TARGETS;CFLAGS;INCLUDES" ${ARGN})
+    if(NOT M_MODEL)
+        set(M_MODEL ${PRN_PEX_MODEL})
+    endif()
     if(NOT M_TARGETS)
         set(M_TARGETS m33)
     endif()
@@ -30,6 +49,9 @@ function(prn_add_module name)
     set(_lua)
     if(M_LUA)
         set(_lua LUA)
+    endif()
+    if(M_MODEL STREQUAL "pic")
+        list(APPEND M_CFLAGS ${PRN_PIC_CFLAGS})
     endif()
     pex_add_module(${name} SOURCES ${M_SOURCES} TARGETS ${M_TARGETS} MODEL ${M_MODEL} KIND ${M_KIND}
         VERSION ${M_VERSION} DESCRIPTION ${M_DESCRIPTION} CFLAGS ${M_CFLAGS} INCLUDES ${M_INCLUDES}

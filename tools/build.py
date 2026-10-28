@@ -4,6 +4,7 @@
   tools/build.py standalone            firmware for the standalone image
   tools/build.py companion             firmware for the companion image
   tools/build.py drivers               printer PEX modules only
+  tools/build.py drivers --pex-model pic   the same as model B, in build/drivers-pic
   tools/build.py all                   all three
 
 A mode's defconfig is the parent's base defconfig (named on the fragment's
@@ -67,10 +68,12 @@ def build_firmware(mode, build_root, jobs):
               (mode, os.path.getsize(binf), 1048576 - os.path.getsize(binf)))
 
 
-def build_drivers(build_root, jobs):
-    bdir = os.path.join(build_root, "drivers")
+def build_drivers(build_root, jobs, model="reloc"):
+    # one build tree per code model: the .pex names are the same in both
+    bdir = os.path.join(build_root, "drivers" if model == "reloc" else "drivers-" + model)
     if not os.path.exists(os.path.join(bdir, "build.ninja")):
-        run(["cmake", "-S", os.path.join(ROOT, "drivers"), "-B", bdir, "-G", "Ninja"], env=env())
+        run(["cmake", "-S", os.path.join(ROOT, "drivers"), "-B", bdir, "-G", "Ninja",
+             "-DPRN_PEX_MODEL=" + model], env=env())
     run(["cmake", "--build", bdir] + (["-j", str(jobs)] if jobs else []), env=env())
 
 
@@ -79,6 +82,8 @@ def main():
     ap.add_argument("what", choices=MODES + ("drivers", "all", "defconfig"))
     ap.add_argument("--build-dir", default=os.environ.get("BTGW_PRINTER_BUILD", os.path.join(ROOT, "build")))
     ap.add_argument("--mode", choices=MODES, help="with 'defconfig': print the merged defconfig")
+    ap.add_argument("--pex-model", choices=("reloc", "pic"), default="reloc",
+                    help="code model of the PEX modules (reloc: A, pic: B)")
     ap.add_argument("-j", type=int, default=0)
     a = ap.parse_args()
     if not os.path.exists(os.path.join(PARENT, "CMakeLists.txt")):
@@ -90,7 +95,7 @@ def main():
         for m in (MODES if a.what == "all" else (a.what,)):
             build_firmware(m, a.build_dir, a.j)
     if a.what in ("drivers", "all"):
-        build_drivers(a.build_dir, a.j)
+        build_drivers(a.build_dir, a.j, a.pex_model)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 /* Shared body of an SPP printer driver; see spp_printer.h. Included once by
  * the driver's .c after it defines
- *     static const spp_drv_t DRV = {...};
+ *     static PEX_PTR_TABLE spp_drv_t DRV = {...};
  * All state is static to the including module. */
 #include "spp_printer.h"
 #include <string.h>
@@ -43,8 +43,8 @@ static struct {
     char emit[640];
 } S;
 
-static const char *const WHY[] = {"none", "timeout", "cancel", "auth", "security", "sdp",
-                                  "rfcomm", "page", "closed", "remote", "dedicated"};
+static PEX_PTR_TABLE const char *WHY[] = {"none", "timeout", "cancel", "auth", "security", "sdp",
+                                         "rfcomm", "page", "closed", "remote", "dedicated"};
 
 static const char *why_name(int w) {
     return (w >= 0 && w < (int)(sizeof WHY / sizeof WHY[0])) ? WHY[w] : "error";
@@ -561,6 +561,7 @@ int pex_main(const pex_host_t *host, uint32_t reason, void *arg) {
     case PEX_INIT:
         return PEX_OK;
     case PEX_APP_RUN:
+        PRN_LOG_BASES();
         memset(&S, 0, sizeof S);
         S.running = 1;
         S.reg_try = pex_ms() - 1000;

@@ -27,6 +27,18 @@
 #define PRN_DRV_SYM "prn_drv"
 #define PRN_ABI 1
 
+/* One log line at APP_RUN with where the loader put this instance: code is
+ * pex_main (image offset 0), rw the start of data+bss+GOT (r9 under model B,
+ * where no address is fixed at link time). A debugger adds an ELF symbol's
+ * offset from its segment start to these to find it. Nothing off target. */
+#if defined(__ARM_EABI__)
+extern char __pex_rw_start[];
+#define PRN_LOG_BASES() pex_log(PEX_LOG_INFO, "%s: code %p rw %p", pex_name(pex_self()), \
+                                (void *)((uintptr_t)pex_main & ~(uintptr_t)1), (void *)__pex_rw_start)
+#else
+#define PRN_LOG_BASES() ((void)0)
+#endif
+
 /* JOB_BEGIN's refusal when the printer is connected but can't print now
  * (out of paper, lid open); its status says which. Outside the PEX_E*
  * range, so the hub can tell it from "not connected" (PEX_ESTATE). */

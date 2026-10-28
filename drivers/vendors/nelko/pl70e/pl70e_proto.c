@@ -1,7 +1,9 @@
 #include "pl70e_proto.h"
 #include <string.h>
 
-const pl70e_pipe_t pl70e_pipes[4] = {
+/* not const: a table of pointers is RW under PEX model B (pex.h PEX_PTR_TABLE;
+ * extern linkage keeps it out of rodata without the attribute) */
+pl70e_pipe_t pl70e_pipes[4] = {
     { "18f0", "2af1", "2af0" },
     { "fff0", "fff2", "fff1" },
     { "49535343-fe7d-4ae5-8fa9-9fafd205e455", "49535343-8841-43f4-a8d4-ecbe34729bb3",
