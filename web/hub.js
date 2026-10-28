@@ -103,8 +103,24 @@ export function setOurDrivers(list) {
 }
 export const ourDrivers = () => [...ours];
 
+/** The state pex.list gives `name` ("loaded", "running", "stopped"), null
+ *  when it isn't loaded, undefined when the list can't be had. */
+async function pexState(name) {
+    try {
+        const list = await call("pex.list");
+        const m = (list.modules || []).find((x) => x && x.name === name);
+        return m ? m.state : null;
+    } catch {
+        return undefined;
+    }
+}
+
+/** pex.load only a module that isn't loaded: the board doesn't refuse a
+ *  second pex.load, it loads another instance (<name>#2) into the pool. */
 async function loadAndStart(name) {
-    for (const op of ["pex.load", "pex.start"]) {
+    const st = await pexState(name);
+    const ops = st === "running" ? [] : st ? ["pex.start"] : ["pex.load", "pex.start"];
+    for (const op of ops) {
         try {
             await call(op, { name });
         } catch (err) {
@@ -160,7 +176,7 @@ export async function ensureDriver(driver) {
     let loaded = [];
     try {
         const list = await call("pex.list");
-        loaded = (list.modules || []).filter((m) => m && (m.state === "loaded" || m.state === "running")).map((m) => m.name);
+        loaded = (list.modules || []).filter((m) => m && ["loaded", "running", "stopped"].includes(m.state)).map((m) => m.name);
     } catch {
         /* no list: unload nothing */
     }

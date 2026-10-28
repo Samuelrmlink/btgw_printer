@@ -96,8 +96,9 @@ per driver: docs/notes/pex-model-b.md.
   the 13.9–17 KB drivers were refused until the hub was unloaded. The default stays `reloc`.
 - **The web app loads a second instance of a loaded driver.** `web/hub.js` `loadAndStart` sends
   `pex.load` + `pex.start` and expects "already" for a loaded module, but `pex.load` creates
-  `<name>#2` (seen: `nelko_ble#2`, `nelko_pl70e#2`, pool 6,160 → 2,152 B). It should check
-  `pex.list` and only load a module that isn't loaded.
+  `<name>#2` (seen: `nelko_ble#2`, `nelko_pl70e#2`, pool 6,160 → 2,152 B). **Fixed:** it reads
+  `pex.list` first and sends `pex.load` only for a module that isn't loaded (`pex.start` for a
+  stopped one); the mock board now loads a second instance and reports `stopped` as the board does.
 - **printer_hub's auto-connect reads only `lfs:/printer/printers.json`**; on a board whose flash
   can't be written (B3) the app saves to `sd:/printer/`, so the hub never sees it. Card files
   are asynchronous (`pex_fs_open` → pending + callback), so the fix is a small callback-driven

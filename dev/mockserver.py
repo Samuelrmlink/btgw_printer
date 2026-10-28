@@ -200,7 +200,7 @@ def test_op(name, p):
         if "hub" in p:
             OPTS["hub"] = bool(p["hub"])
             S["pex"][HUB] = "running" if p["hub"] else "absent"
-        for n, st in (p.get("pex") or {}).items():   # {"name": "running" | "loaded" | null}
+        for n, st in (p.get("pex") or {}).items():   # {"name": "running" | "loaded" | "stopped" | null}
             S["pex"][n] = st
         if "pool_drivers" in p:
             S["pool_drivers"] = int(p["pool_drivers"])
@@ -225,31 +225,36 @@ def pex_op(name, p):
     P = S["pex"]
     n = p.get("name", "")
     if name == "pex.list":
-        return {"arch": "m33", "up": True, "modules": [{"name": k, "state": v} for k, v in P.items() if v in ("loaded", "running")]}
+        return {"arch": "m33", "up": True, "modules": [{"name": k, "state": v} for k, v in P.items() if v in ("loaded", "running", "stopped")]}
     if name == "pex.installed":
-        return {"mounted": True, "modules": [{"name": k, "loaded": v in ("loaded", "running")} for k, v in P.items() if v != "absent"]}
+        return {"mounted": True, "modules": [{"name": k, "loaded": v in ("loaded", "running", "stopped")} for k, v in P.items() if v != "absent" and "#" not in k]}
     if name not in ("pex.load", "pex.start", "pex.stop", "pex.unload"):
         raise ApiError("unknown_op", "no such op: " + name)
     S["pex_ops"].append("%s %s" % (name, n))
     if n not in P or P[n] == "absent":
         raise ApiError("not_installed", "%s is not installed" % n)
     if name == "pex.load":
-        if P[n] is not None:
-            raise ApiError("already_loaded", "%s is already loaded" % n)
-        loaded_drivers = [k for k, v in P.items() if k != HUB and v in ("loaded", "running")]
+        loaded_drivers = [k for k, v in P.items() if k != HUB and v in ("loaded", "running", "stopped")]
         if n != HUB and S["pool_drivers"] and len(loaded_drivers) >= S["pool_drivers"]:
             raise ApiError("no_memory", POOL_MSG)
-        P[n] = "loaded"
+        if P[n] is not None:
+            # as on the board: a loaded module is not refused, a second instance loads
+            k = 2
+            while "%s#%d" % (n, k) in P:
+                k += 1
+            P["%s#%d" % (n, k)] = "loaded"
+        else:
+            P[n] = "loaded"
     elif name == "pex.start":
         if P[n] is None:
             raise ApiError("not_loaded", "%s is not loaded" % n)
         if P[n] == "running":
-            raise ApiError("already_running", "%s is already running" % n)
+            raise ApiError("wrong state", "%s is already running" % n)
         P[n] = "running"
     elif name == "pex.stop":
         if P[n] != "running":
             raise ApiError("not_running", "%s is not running" % n)
-        P[n] = "loaded"
+        P[n] = "stopped"           # as on the board: still loaded
     elif name == "pex.unload":
         if P[n] == "running":
             raise ApiError("busy", "%s is running: stop it first" % n)

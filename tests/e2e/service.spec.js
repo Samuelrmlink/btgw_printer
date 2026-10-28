@@ -57,6 +57,21 @@ test('loading a driver first unloads our other driver that has no printer in use
   expect(await connects(page)).toEqual([{ driver: 'nelko_pl70e', addr: PL70E.addr }]);
 });
 
+test('a driver that is loaded but stopped is started, not loaded again (no second instance)', async ({ page }) => {
+  // as after pex.stop on the board: still loaded, and a pex.load would add nelko_pl70e#2
+  await boot(page, { pex: { ...STOPPED, printer_hub: 'running', nelko_pl70e: 'stopped' }, printers: [PL70E] });
+  await expect(page.locator('#status')).toContainText('Shipping: connected');
+  expect(await pexOps(page)).toEqual(['pex.start nelko_pl70e']);
+  const names = (await op(page, 'pex.list')).modules.map((m) => m.name);
+  expect(names.filter((n) => n.includes('#'))).toEqual([]);
+});
+
+test('printer_hub loaded but stopped at boot: started, not loaded again', async ({ page }) => {
+  await boot(page, { pex: { ...STOPPED, printer_hub: 'stopped' } });
+  await expect(page.locator('#status')).toHaveText('no printer selected');
+  expect(await pexOps(page)).toEqual(['pex.start printer_hub']);
+});
+
 test('a driver with a connected printer is not unloaded for another one', async ({ page }) => {
   await boot(page, {
     pex: { ...STOPPED, printer_hub: 'running', nelko_tspl: 'running' }, printers: [PL70E, PM220],
