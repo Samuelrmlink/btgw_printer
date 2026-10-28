@@ -23,7 +23,7 @@ Areas: **web** (the app in `web/`), **hub** (`drivers/hub`), **driver** (a modul
 These are part of the design. They are not tasks.
 
 - **Drivers are PEX modules.** printer_hub owns every `printer.*` op and event. Each driver is its own module behind `drivers/include/printer_driver.h`.
-- **One driver per protocol family and transport; a model row per printer.** A driver may cover several printers (a model table). A printer that differs a lot gets its own driver. Today: `nelko_tspl` (PM220, P21; Classic SPP), `nelko_pl70e` (PL70e-BT; BLE), `phomemo_d30` (D30; Classic SPP, ESC/POS), `printer_virtual`. See [adding-a-printer.md](adding-a-printer.md).
+- **One driver per protocol family and transport; a model row per printer.** A driver may cover several printers (a model table). A printer that differs a lot gets its own driver. Today: `nelko_tspl` (PM220; Classic SPP), `nelko_ble` (P21; BLE), `nelko_pl70e` (PL70e-BT; BLE), `phomemo_d30` (D30; Classic SPP, ESC/POS), `printer_virtual`. See [adding-a-printer.md](adding-a-printer.md).
 - **The web app renders.** It lays out the label, applies calibration and packs the 1-bit bitmap. Drivers only encode and transport it.
 - **Plain ES modules, gzipped, never minified or bundled.** Modules load lazily, so the board's SD route is never asked for many files at once.
 - **Be gentle with the board.** Other clients and WebSockets share it. The app keeps at most 2 HTTP requests in flight (one queue for module loads, presets, settings and files), backs off on `409 busy` / `503`, and our tools never load-test it.
@@ -108,6 +108,13 @@ These are part of the design. They are not tasks.
     - What moves where: a list of every current button, dialog and setting and its menu path, so nothing is lost.
     - The user decides: menu names and order, which items are toggles, and whether the sidebar stays on wide screens.
   - Done when: `docs/menus.md` is agreed with the owner, both renderers are built from one model, every current action has a menu path, and e2e covers both renderers (desktop by keyboard and mouse, touch by tap in a mobile viewport).
+
+- [ ] **F13 — The P21 prints over BLE**
+  - Area: driver, web, parent.
+  - Why: The owner's P21 (arriving 2026-10-28) uses BLE. It was a Classic model row of `nelko_tspl`; the P21 is dual mode at one address, so it is now the `p21` row of a new BLE driver, `nelko_ble` (feature/p21-ble), and the Classic row is gone.
+  - Needs: the bench plan in [protocols/nelko-p21.md](protocols/nelko-p21.md) ("Bench plan (P21)"): install nelko_ble from `sd:/apps/printer/pex/` (14,844 B: it needs parent R11 item 1, see R13), scan, status, a first label from a script and from the app; answers to that file's open questions (does the gateway see the P21 over LE, the MTU, `ff03` credits, the write gap).
+  - Done when: a 14 × 40 label printed from the app on the bench P21, placed as in the preview, and a 3-copy 14 × 75 job with no `writes_failed`.
+  - 2026-10-27 (feature/p21-ble): fake-host tests (test_p21.c: scan, connect, codes, the golden job at MTU 23 and 247, copies, credits, a failed write and the resync, a silent printer, paper out, power-off notice, the real hub), browser tests, and mcusim (`tools/e2e_sim.py p21`: 96×320 → 0 dots differ). Not on hardware yet.
 
 ## Parked
 

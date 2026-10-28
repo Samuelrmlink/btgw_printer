@@ -432,3 +432,27 @@ Our side: nelko_pl70e treats writes still in flight with no write event for 6 s 
 **Done when:** a module can tell that an event was dropped, and a burst of notifications can't push out a write completion.
 
 **Seen on hardware (2026-10-27):** after the driver guard went in, the next 3x1 job to the PL70e-BT printed and the driver reported `"writes_lost":1`: one write completion never reached the module during a 15.6 KB job.
+
+### R13 (Check): a dual-mode printer over LE, and module size for the P21 driver (2026-10-27)
+
+The P21 driver `nelko_ble` (feature/p21-ble) talks to the printer over LE GATT `ff00`. The P21
+is dual mode: it also pages over Classic, and its LE address is its Classic one
+(merlinschumacher/nelko-p21-print). That author found BlueZ (bleak) would not list it as an
+LE peripheral. Nothing of this is tried on our gateway yet (the P21 arrives 2026-10-28).
+
+To check on the parent (no change asked for yet):
+1. **The LE scan table lists a dual-mode advertiser.** `pex_bt_devices` must return a device
+   whose advertising flags don't say "BR/EDR not supported", and `pex_bt_connect` must make an
+   LE link to it, also when the Classic side knows the same address (inquiry result, bond).
+2. **ATT MTU.** Does the central start an MTU exchange? The P21's server MTU is 23 per that
+   source; the Android app asks 247. `nelko_ble` writes `pex_bt_mtu() - 3` bytes, so whatever
+   the gateway agrees is used.
+3. **Module size (R11 item 1 again).** `nelko_ble.m33.pex` is 14,844 bytes (text 9,672, ro
+   2,412; nelko_tspl went from 15,032 to 14,376 bytes without its P21 row). The largest free
+   pool block on the bench board was about 9.7 KB, so it can't be installed from the card
+   until an SD install streams into the partition (R11 item 1), or after the reboot-and-order
+   workaround we no longer use.
+
+**Done when:** the bench P21 is found by `printer.scan` with `nelko_ble`, connects, and its
+`printer.status` shows an `mtu`; and nelko_ble installs from `sd:/apps/printer/pex/` without a
+reboot.
