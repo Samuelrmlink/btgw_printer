@@ -388,8 +388,8 @@ void pex_install_abort(pex_install_t *s);                            /* nothing 
 How the session works, step by step:
 
 - **Header first** (the 92-byte header plus the section table). It checks format, target, API version and `RAM_ONLY`, and gets `file_size` and from that the sectors needed. It then finds a run, compacting first if needed, as now (`pex_xip.c:580`). A refusal at this point writes nothing to flash.
-- **Already installed: stop early.** `build_id` is in the header. If an index entry has the same one, the session holds off writing until META confirms the name, then returns `PEX_DONE`, and the rest of the file is never read. Today the whole file is read and checked first.
-- **Name checks when META arrives.** These are: the old copy is running (`PEX_EBUSY`), the index is full, and model A's `aoff`, which skips the old entry. Both linkers write every section payload before the image (`pex/tools/pexlink.py:497-502`, `web/js/editor/pexlink.js:569`), so META is always in before the first image byte.
+- **Already installed: stop early.** `build_id` and `file_crc32` are in the header. If an index entry matches the same build (see "Spec changes", item 3), the session holds off writing until META confirms the name, then returns `PEX_DONE`, and the rest of the file is never read. Today the whole file is read and checked first.
+- **Name checks when META arrives.** These are: the old copy is running (`PEX_EBUSY`), the index is full, and model A's `aoff`, which skips the old entry. Both linkers put the section table right after the header and every section payload before the image (`pex/tools/pexlink.py:497-515`, `web/js/editor/pexlink.js:569-579`), so META is always in before the first image byte.
 - **Writing.** A sector is erased when its first page arrives. Each 256-byte page is programmed once it is full; blank pages are skipped, as now. Model A words are relocated page by page. A word never straddles a page, because words are 4-aligned and the image is 8-aligned. The session needs one page buffer, not a sector buffer.
 - **Model A's RO list costs no RAM.** RELOC comes before the image in the same file, so by the time the image streams in, the RO list is already in the destination flash. Entries are read back from there, as `ro_from_xf` already does for moves. The page still being filled is read from the page buffer instead. The sorted check and `split` are done as the entries go by. Model B has no RO list.
 - **Integrity in one pass.**
@@ -404,7 +404,6 @@ How the session works, step by step:
   - the header with its section table, about 400 B with `PEX_MAX_SECTIONS` 24;
   - the 256-byte page buffer;
   - SHA-256 and CRC state, plus counters.
-- **A rule for the spec.** pex-format §4.3 says a loader must not depend on the section order, except that SIG is last. Add: an installable file has every section payload before the image, as both linkers already write. A streamed install refuses a file that doesn't, with "re-link with pexlink". `pex_install(reader)` keeps random access for such files.
 - **One install path (recommended).** `pex_install(reader)` and `pex_install_mem()` become a loop that reads the reader in order and feeds the session. Then memory, LittleFS and the card share one tested path.
 
 **The BTGW glue** (`src/pex/pex_gw_xip.c:240-283`):
@@ -424,17 +423,38 @@ How the session works, step by step:
 | Model A RO list | random 4-byte reads from the source | read back from the destination flash |
 | Longest main-loop stall | the whole install | one sector (an erase and up to 16 page programs) |
 
+**Spec changes** (`docs/pex-format.md`). Every file the existing linkers have written already meets them:
+
+1. **§4.3, the order rule.** Today: a loader must not depend on the section order, except that SIG is last. Add: an installable file has its section table right after the header, and its RELOC and META payloads before the image.
+   - These are the only sections the install reads. IMPORTS, EXPORTS, INIT and FINI are read at load time, from flash.
+   - So a linker may still put sections the install doesn't use, such as DEBUG (several KB of symbol names), after the image.
+   - A streamed install refuses a file that breaks the rule, with "re-link with pexlink". `pex_install(reader)` keeps random access and still takes it.
+2. **§4.5, RELOC: the RO list is sorted** ascending as u32, so code entries come before RW entries (bit 31). Today this is said only in §16 ("pexlink always wrote it so; the install checks"). Both linkers sort it (`pexlink.py:451`, `pexlink.js:510`), and the install refuses an unsorted list. A third linker should learn the rule from the format section.
+3. **§16, what "the same build" means.**
+   - `build_id` is a hash of the image only. Today an install treats "same `build_id` and name" as already installed (`pex_xip.c:534`).
+   - A re-signed file (unsigned to signed, or another key) or one with only its META changed therefore looks identical, and the new copy is silently skipped. On a `signed-only` device an unsigned copy would then stay installed.
+   - Define it: the same build means `build_id` and `file_crc32` both match, and the installed copy is signed if the new file is.
+   - The installed copy's `file_crc32` is in its own header in flash (`fptr(sec*SEC + 72)`), so the index format doesn't change. This applies to `pex_install(reader)` as well, not only the stream.
+4. **§16, the push install API.**
+   - The four calls (`begin`, `write`, `end`, `abort`) and the new `PEX_DONE`.
+   - The index lock: other installs, uninstalls, compactions and a second session get `PEX_EBUSY`. The host aborts a session left idle.
+   - That the state "verified at install" now means the flash copy's CRC and SHA-256 matched the stream whose signature was checked.
+   - A line in §18 (changes).
+5. **No format version change.** The rules above describe what both linkers already write, and a file that breaks them gets a clear refusal, not a misread. So `format_minor` stays as it is; neither the format version nor the host API version needs a bump.
+
 **Optional follow-on.** The same session can sit behind an HTTP op, such as `PUT /api/pex/install`, that streams the upload body straight into the partition. Then the editor's compiler (R14) installs a module with no card and no LittleFS copy, and B3 can't block it.
 
 **Tests** (host, `pex/test`):
 - Feeding the file in 1, 7, 256 and 4096-byte chunks, and in one piece, leaves the same flash bytes and index entry as `pex_install_mem`. Covers model A and B, signed and unsigned.
 - The same build already installed: the session reads only the header and META.
+- The same image re-signed, or with only META changed (same `build_id`, different `file_crc32`): installed, not skipped. That holds for the session and for `pex_install(reader)`. An unsigned copy is replaced by the signed file.
 - Refusals before any flash write: wrong target, `RAM_ONLY`, no room.
 - `PEX_EBUSY` from install, uninstall and compact while a session is open.
 - An abort mid-way leaves the index unchanged and the run free.
 - A remount after a partial session (a simulated power cut) has nothing committed.
 - A byte changed mid-stream, or a page that programs wrong, is refused at `end`.
-- A file with a section payload after the image is refused, while `pex_install(reader)` still takes it.
+- A file with RELOC or META after the image is refused, while `pex_install(reader)` still takes it. A file with DEBUG after the image streams fine.
+- An unsorted RO list is refused, as now.
 - Glue, in the host SD tests: an `sd:/` install of a file larger than the pool's largest free piece succeeds.
 
 **Done when (item 1):** on the bench board, with printer_hub and a driver loaded, an `sd:/` install of a module larger than the pool's largest free piece succeeds. `pex.sd_done` reports ok, and nothing else on the board stalls.
