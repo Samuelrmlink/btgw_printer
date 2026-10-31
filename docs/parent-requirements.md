@@ -332,6 +332,7 @@ modules only fit with a reboot and a fixed install order. What we measured:
    12800 in one piece"). The installed copy runs in place, so its code never
    needs the pool. Needed: stream an SD install into the partition in chunks
    (a few KB of buffer), so the pool size bounds a module's RW, not its file.
+   Change plan: "R11 item 1: a streamed install" below.
 2. **The RW reservation of every installed module is taken at boot, loaded or
    not** (`rw_area` 26,080 B for Anker + Pinecil, 33,264 B with printer_hub).
    With printer_hub installed the pool had 12,800 bytes free with nothing of
@@ -356,6 +357,87 @@ without a reboot, in either order.
 - With printer_hub (RW 7,184) and nelko_tspl running, `rw_area` 33,264 B, pool `free` 12,200. Stop, unload and uninstall of nelko_tspl all succeeded; after that the pool had 12,504 free and `rw_area` was still 33,264 (item 2). The new 14,868 B nelko_tspl could not be installed from the card (item 1), so the board was left with no Classic driver.
 - **One reboot was necessary because of this** (owner allows a reboot only when necessary, and each one points at a firmware bug): uninstall printer_hub, reboot (`rw_area` 26,080, pool 19,984), install nelko_tspl, install printer_hub, load and start both. Afterwards printer_hub runs from RAM (`xip:false`, item 3) and the pool has 2,504 B free, so a second driver can't load until the next boot.
 - Odd: nelko_pl70e, installed after boot, reported `xip_ready:true` while `rw_area` stayed at 26,080 / 33,264 (its 1,284 B RW not counted). Worth checking that its RW address is really reserved.
+
+#### R11 item 1: a streamed install (change plan, 2026-10-31, against parent 719b357)
+
+The change belongs in the generic PEX runtime (`pex/runtime/`), with a small change to the BTGW glue. PEX isn't specific to BTGW, so any host whose storage or transport is asynchronous (a card, an HTTP upload, a serial link) gets the same install path. Line numbers are from parent 719b357.
+
+**Where the whole-file buffer comes from.** Only the SD path has one:
+- The runtime already installs through a reader: `pex_install(const pex_reader_t *)` at `pex/runtime/pex_xip.c:510`. The LittleFS path calls it without buffering the file (`src/pex/pex_gw.c:291`).
+- Card reads are jobs for the storage worker. They finish on a later main-loop pass (`src/sd/sd_jobs.h`). A reader has to return the bytes at once.
+- So `pex_gw_sd_poll()` first reads the whole file into `pex_alloc_host(size)`, then calls `pex_install_mem()` (`src/pex/pex_gw_xip.c:248,275`). That buffer is item 1's one-piece requirement.
+
+**What the install does with its input today:**
+1. Reads the header and the section table.
+2. Runs `pex__integrity`: CRC, plus SHA-256 when signed, over the whole file in 128-byte reads, then the signature check.
+3. Reads META for the name. Reads the RO relocation list one 4-byte entry at a time, to check it is sorted.
+4. Writes each destination sector (`write_sector`, `pex_xip.c:340`). The image comes in 256-byte pages. For model A it also looks up RO entries by binary search.
+5. Verifies in place: CRC and the signature again, this time over the flash copy (`pex_xip.c:608`).
+
+So the file is read twice and the signature is checked twice. The reads also jump back and forth between the image and the RO list. That is fine from memory or LittleFS, but not over a job per read on the card.
+
+**Proposal: a push install session in the runtime.** The caller hands over the file's bytes in file order, in chunks of any size. The runtime writes them straight into the destination run.
+
+```c
+pex_install_t *pex_install_begin(uint32_t flags);                    /* NULL + pex_errmsg() */
+int  pex_install_write(pex_install_t *s, const void *p, uint32_t n); /* PEX_OK, PEX_DONE (already installed: stop sending), or an error */
+int  pex_install_end(pex_install_t *s);                              /* the slot, as pex_install() returns it */
+void pex_install_abort(pex_install_t *s);                            /* nothing committed; the run stays free */
+```
+
+How the session works, step by step:
+
+- **Header first** (the 92-byte header plus the section table). It checks format, target, API version and `RAM_ONLY`, and gets `file_size` and from that the sectors needed. It then finds a run, compacting first if needed, as now (`pex_xip.c:580`). A refusal at this point writes nothing to flash.
+- **Already installed: stop early.** `build_id` is in the header. If an index entry has the same one, the session holds off writing until META confirms the name, then returns `PEX_DONE`, and the rest of the file is never read. Today the whole file is read and checked first.
+- **Name checks when META arrives.** These are: the old copy is running (`PEX_EBUSY`), the index is full, and model A's `aoff`, which skips the old entry. Both linkers write every section payload before the image (`pex/tools/pexlink.py:497-502`, `web/js/editor/pexlink.js:569`), so META is always in before the first image byte.
+- **Writing.** A sector is erased when its first page arrives. Each 256-byte page is programmed once it is full; blank pages are skipped, as now. Model A words are relocated page by page. A word never straddles a page, because words are 4-aligned and the image is 8-aligned. The session needs one page buffer, not a sector buffer.
+- **Model A's RO list costs no RAM.** RELOC comes before the image in the same file, so by the time the image streams in, the RO list is already in the destination flash. Entries are read back from there, as `ro_from_xf` already does for moves. The page still being filled is read from the page buffer instead. The sorted check and `split` are done as the entries go by. Model B has no RO list.
+- **Integrity in one pass.**
+  - CRC and SHA-256 accumulate as the bytes go by.
+  - At `end`: the CRC check, then one signature check over that digest.
+  - Then verification in place: read the flash copy back (`xf_read`) and compare its CRC and SHA-256 with the stream's. Same digest means same bytes, so no second ECDSA verify.
+  - Then commit the index entry, as now.
+  - A file changed on the card mid-install, a short read and a flash fault each fail one of these checks, and nothing is committed. Power cuts behave as now: a run with no index entry is free space.
+- **Bounded work per call.** A 4 KB write does at most one sector erase and 16 page programs. That is one main-loop pass, where today the whole install happens in one pass.
+- **A lock on the index.** While a session is open, other index changes return `PEX_EBUSY` and name the module. That covers an install from any path, an uninstall, a compaction and a second `begin`. Without the lock the destination run would look free, because it isn't in the index yet. Loading and unloading modules isn't affected. The host aborts a session that has been idle for some seconds, so a client that disappears can't hold the lock.
+- **State in a long-term host block, not a scratch arena.** The session lives across main-loop passes, and scratch arenas must end in LIFO order (spec 7.2). It needs about 1 KB:
+  - the header with its section table, about 400 B with `PEX_MAX_SECTIONS` 24;
+  - the 256-byte page buffer;
+  - SHA-256 and CRC state, plus counters.
+- **A rule for the spec.** pex-format §4.3 says a loader must not depend on the section order, except that SIG is last. Add: an installable file has every section payload before the image, as both linkers already write. A streamed install refuses a file that doesn't, with "re-link with pexlink". `pex_install(reader)` keeps random access for such files.
+- **One install path (recommended).** `pex_install(reader)` and `pex_install_mem()` become a loop that reads the reader in order and feeds the session. Then memory, LittleFS and the card share one tested path.
+
+**The BTGW glue** (`src/pex/pex_gw_xip.c:240-283`):
+- After the open, call `pex_install_begin`.
+- Pass each SDJ_READ result (up to 4 KB in `sdj_buf()`, the borrowed transfer ring) to `pex_install_write` before `sdj_finish`. Nothing is copied and no pool buffer is used.
+- At end of file, call `pex_install_end`, then emit `pex.sd_done` as now. On `PEX_DONE`, close the file early and report ok.
+- On a read error or a pulled card, call `pex_install_abort`.
+- Check the size against the partition, not the pool. The 512 KB cap stays.
+- `pex.load` from `sd:/` into RAM still needs the module in RAM, so it keeps today's buffer. It could read only the image rather than the whole file. With model B, install-and-run-in-place is the normal path anyway.
+
+| | SD install today | Streamed |
+|---|---|---|
+| Pool needed for the install | the file, in one piece (14,844 B for nelko_ble) | about 1 KB, in any free block |
+| Reads of the file | 2 (check, then write) | 1 |
+| Signature checks | 2 | 1 |
+| Same build already installed | whole file read and checked | header and META only |
+| Model A RO list | random 4-byte reads from the source | read back from the destination flash |
+| Longest main-loop stall | the whole install | one sector (an erase and up to 16 page programs) |
+
+**Optional follow-on.** The same session can sit behind an HTTP op, such as `PUT /api/pex/install`, that streams the upload body straight into the partition. Then the editor's compiler (R14) installs a module with no card and no LittleFS copy, and B3 can't block it.
+
+**Tests** (host, `pex/test`):
+- Feeding the file in 1, 7, 256 and 4096-byte chunks, and in one piece, leaves the same flash bytes and index entry as `pex_install_mem`. Covers model A and B, signed and unsigned.
+- The same build already installed: the session reads only the header and META.
+- Refusals before any flash write: wrong target, `RAM_ONLY`, no room.
+- `PEX_EBUSY` from install, uninstall and compact while a session is open.
+- An abort mid-way leaves the index unchanged and the run free.
+- A remount after a partial session (a simulated power cut) has nothing committed.
+- A byte changed mid-stream, or a page that programs wrong, is refused at `end`.
+- A file with a section payload after the image is refused, while `pex_install(reader)` still takes it.
+- Glue, in the host SD tests: an `sd:/` install of a file larger than the pool's largest free piece succeeds.
+
+**Done when (item 1):** on the bench board, with printer_hub and a driver loaded, an `sd:/` install of a module larger than the pool's largest free piece succeeds. `pex.sd_done` reports ok, and nothing else on the board stalls.
 
 ### R12 (Must for companion mode): installable apps — files on the card, registered with the parent UI (2026-10-27)
 
